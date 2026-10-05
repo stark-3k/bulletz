@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Thread } from "@bulletz/shared";
-import { Api, type Constraint, type Presence } from "./api.ts";
+import { Api, type Constraint, type Presence, type Project } from "./api.ts";
 import { TerminalPane, bridge } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 
@@ -95,18 +95,21 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
   const [tasks, setTasks] = useState<Task[]>([]);
   const [presence, setPresence] = useState<Presence[]>([]);
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
   const [connected, setConnected] = useState(false);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
   const refreshMemory = useCallback(async () => {
-    const [d, c, t, p, w] = await Promise.all([
+    const [d, c, t, p, w, proj] = await Promise.all([
       api.decisions(),
       api.constraints(),
       api.tasks(),
       api.presence(),
       api.widgets(),
+      api.project(),
     ]);
+    setProject(proj);
     setDecisions(d.decisions);
     setConstraints(c.constraints);
     setTasks(t.tasks);
@@ -175,6 +178,8 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
     const decide = /^\/decide\s+([\s\S]+)/.exec(text);
     const constrain = /^\/constrain\s+([\s\S]+)/.exec(text);
     const task = /^\/task\s+([\s\S]+)/.exec(text);
+    const about = /^\/about\s+([\s\S]+)/.exec(text);
+    const link = /^\/link\s+(\S+)\s+(\S+)\s+(https?:\/\/\S+)(?:\s+--\s+([\s\S]+))?/.exec(text);
 
     if (decide?.[1]) {
       const [statement, ...why] = decide[1].split(/\s*--\s*/);
@@ -188,6 +193,15 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
       await api.createConstraint({
         rule: rule!.trim(),
         ...(why.length ? { rationale: why.join(" -- ").trim() } : {}),
+      });
+    } else if (about?.[1]) {
+      await api.setProjectSummary(about[1].trim());
+    } else if (link) {
+      await api.addProjectLink({
+        kind: link[1]!,
+        label: link[2]!,
+        url: link[3]!,
+        ...(link[4] ? { notes: link[4].trim() } : {}),
       });
     } else if (task?.[1]) {
       await api.createTask({ title: task[1].trim(), thread_id: activeId });
@@ -262,6 +276,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         <div className="pane">
           <div className="pane-head">Project memory</div>
           <div className="pane-body">
+            <ProjectCard project={project} />
             <Memory decisions={decisions} constraints={constraints} tasks={tasks} />
             <WidgetPanel widgets={widgets} api={api} onChange={refreshMemory} />
           </div>
@@ -461,6 +476,42 @@ function WidgetPanel({
   );
 }
 
+
+/** Project identity: what this is and where it lives. First thing in the
+ *  memory pane because it is the first thing a new arrival needs, and the
+ *  part a checkout cannot tell them. */
+function ProjectCard({ project }: { project: Project | null }) {
+  if (!project) return null;
+  return (
+    <div className="mem-group project-card">
+      <div className="mem-label">Project</div>
+      <div className="project-name">{project.name}</div>
+      {project.summary ? (
+        <div className="project-summary">{project.summary}</div>
+      ) : (
+        <div className="empty">no summary — try /about</div>
+      )}
+      {project.links.length > 0 && (
+        <div className="project-links">
+          {project.links.map((l) => (
+            <a
+              className="project-link"
+              key={l.id}
+              href={l.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={l.notes ?? l.url}
+            >
+              <span className="project-link-kind">{l.kind}</span>
+              <span className="project-link-label">{l.label}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Memory({
   decisions,
   constraints,
@@ -585,8 +636,9 @@ function Composer({
         </button>
       </div>
       <div className="composer-hint">
-        <code>/decide</code> statement -- why · <code>/constrain</code> rule -- why ·{" "}
-        <code>/task</code> title
+        <code>/decide</code> stmt -- why · <code>/constrain</code> rule -- why ·{" "}
+        <code>/task</code> title · <code>/about</code> summary ·{" "}
+        <code>/link</code> kind label url
       </div>
     </div>
   );

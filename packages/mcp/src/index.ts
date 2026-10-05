@@ -24,7 +24,7 @@ const fail = (e: unknown) => ({
 
 server.tool(
   "context_pack",
-  "Get what this project knows: durable constraints, current decisions, open work, and optionally a thread's history. CALL THIS FIRST when starting work on an unfamiliar task — it is the project's memory, which the repo does not contain.",
+  "Get what this project knows: what it is and where it lives (repo, deployed URLs, dashboards), durable constraints, current decisions, open work, and optionally a thread's history. CALL THIS FIRST when starting work on an unfamiliar task — it is the project's memory, which the repo does not contain.",
   {
     thread_id: z.string().uuid().optional().describe("Include this thread's recent messages"),
     query: z.string().max(500).optional().describe("Also include context relevant to this topic"),
@@ -400,6 +400,67 @@ server.tool(
     try {
       const r = await api.post<{ widget: { id: string; name: string; status: string } }>("/widgets", args);
       return text(`Published widget "${r.widget.name}" (${r.widget.id}) as a draft. A human can activate it in the UI.`);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+
+/* -------------------------------- project -------------------------------- */
+
+server.tool(
+  "project_info",
+  "What this project is and where it lives — summary, repo, deployed URLs, dashboards, docs. These are the coordinates the checkout cannot tell you.",
+  {},
+  async () => {
+    try {
+      const p = await api.get<{
+        name: string;
+        summary: string | null;
+        links: Array<{ kind: string; label: string; url: string; notes: string | null }>;
+      }>("/project");
+      const out = [`# ${p.name}`, p.summary ?? "_No summary recorded._", ""];
+      if (p.links.length) {
+        out.push("## Where it lives");
+        for (const l of p.links) out.push(`- ${l.kind}: ${l.label} — ${l.url}${l.notes ? ` (${l.notes})` : ""}`);
+      } else {
+        out.push("_No links recorded._");
+      }
+      return text(out.join("\n"));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "set_project_summary",
+  "Describe what this project is, in a paragraph or two, for whoever (human or agent) arrives next. Replaces the existing summary.",
+  { summary: z.string().min(10).max(8000) },
+  async (args) => {
+    try {
+      await api.put("/project", args);
+      return text("Project summary updated.");
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "add_project_link",
+  "Record where part of the project lives — repo, production site, staging, docs, a dashboard. Use for things the checkout cannot reveal. Re-using a label updates that link.",
+  {
+    kind: z.enum(["repo", "site", "staging", "docs", "dashboard", "tracker", "design", "api", "chat", "other"]),
+    label: z.string().min(1).max(80).describe("Short name, unique in the workspace, e.g. 'production'"),
+    url: z.string().url().max(2000),
+    notes: z.string().max(500).optional(),
+  },
+  async (args) => {
+    try {
+      await api.post("/project/links", args);
+      return text(`Recorded ${args.kind} link "${args.label}".`);
     } catch (e) {
       return fail(e);
     }

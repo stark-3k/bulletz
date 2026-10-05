@@ -265,3 +265,64 @@ export async function updateTaskStatus(
     [workspaceId, taskId, status],
   );
 }
+
+/* -------------------------------- project -------------------------------- */
+
+export type ProjectLink = {
+  id: string;
+  kind: string;
+  label: string;
+  url: string;
+  notes: string | null;
+  status: string;
+};
+
+export async function getProject(workspaceId: string) {
+  const ws = await one<{ id: string; slug: string; name: string; summary: string | null }>(
+    `select id, slug, name, summary from workspaces where id = $1`,
+    [workspaceId],
+  );
+  const links = await q<ProjectLink>(
+    `select id, kind, label, url, notes, status from project_links
+      where workspace_id = $1 and status = 'active'
+      order by array_position(
+        array['repo','site','staging','api','docs','dashboard','tracker','design','chat','other'], kind),
+        label`,
+    [workspaceId],
+  );
+  return { ...ws, links };
+}
+
+export async function setProjectSummary(workspaceId: string, summary: string) {
+  return one(
+    `update workspaces set summary = $2, summary_updated_at = now() where id = $1
+     returning id, slug, name, summary`,
+    [workspaceId, summary],
+  );
+}
+
+export async function upsertProjectLink(input: {
+  workspaceId: string;
+  kind: string;
+  label: string;
+  url: string;
+  notes?: string | undefined;
+  createdBy: string;
+}): Promise<ProjectLink> {
+  return one<ProjectLink>(
+    `insert into project_links (workspace_id, kind, label, url, notes, created_by)
+     values ($1,$2,$3,$4,$5,$6)
+     on conflict (workspace_id, label) do update
+       set kind = excluded.kind, url = excluded.url, notes = excluded.notes, status = 'active'
+     returning id, kind, label, url, notes, status`,
+    [input.workspaceId, input.kind, input.label, input.url, input.notes ?? null, input.createdBy],
+  );
+}
+
+export async function retireProjectLink(workspaceId: string, label: string) {
+  return maybeOne(
+    `update project_links set status = 'retired'
+      where workspace_id = $1 and label = $2 returning id, label, status`,
+    [workspaceId, label],
+  );
+}

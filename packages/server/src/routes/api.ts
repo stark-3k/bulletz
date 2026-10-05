@@ -20,6 +20,61 @@ export async function apiRoutes(app: FastifyInstance) {
 
   app.get("/me", async (req) => ({ actor: req.actor }));
 
+  /* ------------------------------- project ------------------------------- */
+
+  app.get("/project", async (req) => await repo.getProject(req.actor.workspace_id));
+
+  app.put("/project", async (req) => {
+    const body = z.object({ summary: z.string().min(10).max(8000) }).parse(req.body);
+    const project = await repo.setProjectSummary(req.actor.workspace_id, body.summary);
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: null,
+      actorId: req.actor.id,
+      kind: "project_summary",
+      body: body.summary.slice(0, 500),
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { project };
+  });
+
+  app.post("/project/links", async (req, reply) => {
+    const body = z
+      .object({
+        kind: z.enum(["repo", "site", "staging", "docs", "dashboard", "tracker", "design", "api", "chat", "other"]),
+        label: z.string().min(1).max(80),
+        url: z.string().url().max(2000),
+        notes: z.string().max(500).optional(),
+      })
+      .parse(req.body);
+    const link = await repo.upsertProjectLink({
+      workspaceId: req.actor.workspace_id,
+      kind: body.kind,
+      label: body.label,
+      url: body.url,
+      notes: body.notes,
+      createdBy: req.actor.id,
+    });
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: null,
+      actorId: req.actor.id,
+      kind: "project_link",
+      body: `${body.kind}: ${body.label}`,
+      payload: { link },
+      refs: { urls: [body.url] },
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return reply.code(201).send({ link });
+  });
+
+  app.delete("/project/links/:label", async (req, reply) => {
+    const { label } = z.object({ label: z.string() }).parse(req.params);
+    const link = await repo.retireProjectLink(req.actor.workspace_id, decodeURIComponent(label));
+    if (!link) return reply.code(404).send({ error: "link not found" });
+    return { link };
+  });
+
   /* ------------------------------- threads ------------------------------- */
 
   app.get("/threads", async (req) => ({

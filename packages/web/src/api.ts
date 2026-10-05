@@ -10,6 +10,22 @@ export type Constraint = {
   created_at: string;
 };
 
+export type ProjectLink = {
+  id: string;
+  kind: string;
+  label: string;
+  url: string;
+  notes: string | null;
+};
+
+export type Project = {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string | null;
+  links: ProjectLink[];
+};
+
 export type Presence = {
   handle: string;
   kind: string;
@@ -56,6 +72,11 @@ export class Api {
   createTask = (input: { title: string; thread_id?: string }) =>
     this.call<{ task: Task }>("POST", "/tasks", input);
   presence = () => this.call<{ presence: Presence[] }>("GET", "/presence");
+
+  project = () => this.call<Project>("GET", "/project");
+  setProjectSummary = (summary: string) => this.call("PUT", "/project", { summary });
+  addProjectLink = (l: { kind: string; label: string; url: string; notes?: string }) =>
+    this.call("POST", "/project/links", l);
 
   widgets = () => this.call<{ widgets: unknown[] }>("GET", "/widgets");
   widgetData = (id: string) => this.call<{ rows: unknown[]; ms: number }>("GET", `/widgets/${id}/data`);

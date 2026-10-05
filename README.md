@@ -50,6 +50,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   `source_event_ids` so a caller can always drill back to raw events.
 - **Live state is never stored.** CI status, PR mergeability, deploy health are
   tool reads. Caching them means serving stale facts.
+- **Identity is its own primitive.** A repo URL is not a constraint (a rule you
+  must not break) and not a decision (a choice with a rationale, subject to
+  supersession) — it is a stable fact about where the project lives. Filing it
+  under either would dilute them. The bar for `project_links`: it must *not* be
+  derivable from the checkout. The agent has the files; it does not know the
+  production URL or which dashboard shows the error budget.
 - **Agents draft; humans activate.** An agent that can both author and run a
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created

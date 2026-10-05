@@ -1,6 +1,6 @@
 import type { SearchHit } from "@bulletz/shared";
 import { q } from "./db.js";
-import { listConstraints, listDecisions, listTasks, threadEvents } from "./repo.js";
+import { getProject, listConstraints, listDecisions, listTasks, threadEvents } from "./repo.js";
 
 /** Unit weights. Extracted units rank above raw chat on purpose: a decision is
  *  worth more to a caller than the twelve messages that produced it. */
@@ -116,7 +116,8 @@ export async function contextPack(
   workspaceId: string,
   opts: { thread_id?: string | undefined; query?: string | undefined; budget?: number } = {},
 ) {
-  const [constraints, decisions, tasks] = await Promise.all([
+  const [project, constraints, decisions, tasks] = await Promise.all([
+    getProject(workspaceId),
     listConstraints(workspaceId, 25),
     listDecisions(workspaceId, { limit: 20 }),
     listTasks(workspaceId, { status: ["open", "in_progress", "blocked"], limit: 25 }),
@@ -140,13 +141,25 @@ export async function contextPack(
       })
     : [];
 
-  return { constraints, decisions, tasks, thread, relevant };
+  return { project, constraints, decisions, tasks, thread, relevant };
 }
 
 /** Renders a context pack as the markdown an agent actually reads. Kept on the
  *  server so every client and every agent sees the same shape. */
 export function renderContextPack(pack: Awaited<ReturnType<typeof contextPack>>): string {
   const out: string[] = [];
+
+  // Identity first: what this is and where it lives. An agent that reads
+  // nothing else should still come away knowing those two things.
+  out.push(`# ${pack.project.name}`);
+  if (pack.project.summary) out.push("", pack.project.summary);
+  if (pack.project.links.length) {
+    out.push("", "## Where it lives");
+    for (const l of pack.project.links) {
+      out.push(`- ${l.kind}: [${l.label}](${l.url})${l.notes ? ` — ${l.notes}` : ""}`);
+    }
+  }
+  out.push("");
 
   if (pack.constraints.length) {
     out.push("## Project constraints (durable rules — do not violate)");
