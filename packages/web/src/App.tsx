@@ -287,15 +287,12 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           </div>
         </div>
 
-        <div className="pane center-split">
-          <div className="center-top">
-            <div className="pane-head">{active?.title ?? "No thread"}</div>
-            <div className="pane-body">
-              <Stream events={events} widgets={widgets} api={api} onChange={refreshMemory} />
-            </div>
-            <Composer disabled={!activeId} onSubmit={submit} />
+        <div className="pane">
+          <div className="pane-head">{active?.title ?? "No thread"}</div>
+          <div className="pane-body">
+            <Stream events={events} widgets={widgets} api={api} onChange={refreshMemory} />
           </div>
-          <TerminalDock />
+          <Composer disabled={!activeId} onSubmit={submit} />
         </div>
         </>
 
@@ -324,6 +321,10 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           </div>
         </div>
       </div>
+
+      {/* Workbench-level, outside the surface switch: unmounting the terminal
+          kills its pty, so a running job must survive Chat <-> Apps. */}
+      <TerminalDock />
     </div>
   );
 }

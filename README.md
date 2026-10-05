@@ -64,6 +64,9 @@ context is a replayable *query* over the log, not a synced copy of it.
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created
   `draft`; activation is refused for any non-human actor (403).
+- **The terminal is workbench-level, never inside a surface.** Unmounting it
+  kills its pty, which takes any running job with it, so it lives outside the
+  Chat/Apps switch and spans the window like VS Code's panel.
 - **Two surfaces, one state.** Chat is the narrative; Apps is the workspace.
   A widget inline in a thread is an attachment; the same widget in Apps gets
   the whole canvas. Built-in apps (task board, registry) sit beside
