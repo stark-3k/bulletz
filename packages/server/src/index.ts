@@ -35,8 +35,10 @@ app.server.on("upgrade", async (req, socket, head) => {
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const remove = addConn({ ws, workspaceId: actor.workspace_id, actorHandle: actor.handle });
+      // hello first: a client must learn who it is before it sees any fanout,
+      // and addConn broadcasts this actor's presence immediately.
       ws.send(JSON.stringify({ type: "hello", workspace_id: actor.workspace_id, actor }));
+      const remove = addConn({ ws, workspaceId: actor.workspace_id, actorHandle: actor.handle });
       ws.on("close", remove);
       ws.on("error", remove);
     });
