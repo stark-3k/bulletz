@@ -301,5 +301,110 @@ server.tool(
   },
 );
 
+
+/* ---------------------------- tools & widgets ---------------------------- */
+
+server.tool(
+  "create_tool",
+  "Define a workspace tool that runs ON THE SERVER. It is created as a DRAFT and cannot run until a human activates it in the UI — you cannot activate it yourself. Prefer kind 'sql' (a read-only query over the workspace log) since it needs no credentials.",
+  {
+    name: z.string().min(2).max(64).regex(/^[a-z][a-z0-9_]*$/).describe("lowercase snake_case"),
+    description: z.string().min(5).max(1000).describe("What it returns. Written for whoever reads the tool list."),
+    impl: z.union([
+      z.object({
+        kind: z.literal("sql"),
+        query: z
+          .string()
+          .describe(
+            "A single read-only SELECT/WITH. $1 is always the workspace id and must appear in the WHERE clause; $2 is a jsonb of the call arguments. Write statements and multiple statements are rejected.",
+          ),
+      }),
+      z.object({
+        kind: z.literal("http"),
+        method: z.enum(["GET", "POST"]).default("GET"),
+        url: z.string().url().describe("May use {{args.name}} and {{secret.NAME}} placeholders"),
+        headers: z.record(z.string()).default({}),
+      }),
+    ]),
+    egress_allow: z.array(z.string()).default([]).describe("Required for http tools: bare hostnames this tool may reach"),
+  },
+  async (args) => {
+    try {
+      const r = await api.post<{ tool: { id: string; name: string; status: string } }>("/tools", args);
+      return text(
+        `Drafted tool "${r.tool.name}" (${r.tool.id}).\nIt is a DRAFT and will not run until a human activates it.`,
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "list_tools",
+  "List the workspace's tools and whether each is active.",
+  {},
+  async () => {
+    try {
+      const r = await api.get<{ tools: Array<Record<string, string>> }>("/tools");
+      if (!r.tools.length) return text("No tools defined.");
+      return text(
+        r.tools.map((t) => `[${t.status}] ${t.name} (${t.kind}) — ${t.description}\n    id: ${t.id}`).join("\n"),
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "invoke_tool",
+  "Run an active workspace tool and get its rows back.",
+  { tool: z.string().describe("Tool name or id"), args: z.record(z.unknown()).default({}) },
+  async (a) => {
+    try {
+      const r = await api.post<{ rows: unknown[]; ms: number }>(`/tools/${a.tool}/invoke`, a.args);
+      return text(`${r.rows.length} rows in ${r.ms}ms\n${JSON.stringify(r.rows, null, 2).slice(0, 4000)}`);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "publish_widget",
+  "Publish a live UI into the workspace chat. Two kinds:\n• 'view' (preferred) — pick a built-in view type and map your tool's fields to it. Typed, themed, accessible, and it refreshes without costing a model call.\n• 'html' — your own HTML/CSS/JS for what the view types cannot express. It runs in a null-origin sandbox with no credentials and no access to the host page.\nWidgets are created as DRAFTS; a human activates them.",
+  {
+    name: z.string().min(2).max(64),
+    description: z.string().max(500).optional(),
+    kind: z.enum(["view", "html"]),
+    tool: z.string().optional().describe("Name or id of the tool supplying rows (required for 'view')"),
+    tool_args: z.record(z.unknown()).default({}),
+    view: z
+      .object({
+        type: z.enum(["metric", "bar", "table", "status_grid"]),
+        title: z.string().max(120).optional(),
+        value_field: z.string().optional().describe("metric/bar: the numeric field"),
+        label_field: z.string().optional().describe("bar/status_grid: the name field"),
+        status_field: z.string().optional().describe("status_grid: field holding ok|warn|down"),
+        detail_field: z.string().optional().describe("status_grid: small text under each label"),
+        unit: z.string().max(16).optional(),
+        columns: z.array(z.string()).optional().describe("table: column order"),
+        refresh_ms: z.number().int().min(2000).max(600000).optional().describe("Re-fetch interval; never involves a model"),
+      })
+      .optional(),
+    html: z.string().max(400000).optional().describe("kind='html': a full fragment. No network access."),
+    thread_id: z.string().uuid().optional().describe("Post it into this thread"),
+  },
+  async (args) => {
+    try {
+      const r = await api.post<{ widget: { id: string; name: string; status: string } }>("/widgets", args);
+      return text(`Published widget "${r.widget.name}" (${r.widget.id}) as a draft. A human can activate it in the UI.`);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

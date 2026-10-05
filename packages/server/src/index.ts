@@ -6,6 +6,7 @@ import { pool } from "./db.js";
 import { env } from "./env.js";
 import { addConn, connectionCount } from "./realtime.js";
 import { apiRoutes } from "./routes/api.js";
+import { widgetRoutes } from "./routes/widgets.js";
 
 const app = Fastify({ logger: { level: env.logLevel } });
 
@@ -17,6 +18,7 @@ app.get("/health", async () => {
 });
 
 await app.register(apiRoutes, { prefix: "/v1" });
+await app.register(widgetRoutes, { prefix: "/v1" });
 
 // Realtime fanout. Token in the query string because browsers cannot set
 // headers on a WebSocket handshake.

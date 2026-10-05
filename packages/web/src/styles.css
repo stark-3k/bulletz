@@ -317,3 +317,105 @@ button { font: inherit; cursor: pointer; }
 }
 .tab:hover { color: var(--fg-dim); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+
+/* -------------------------------- widgets ------------------------------- */
+/* Chart series use the validated dark-mode categorical steps; status colours
+   are the reserved status palette and always ship with a glyph + label. */
+:root {
+  --series-1: #3987e5;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+}
+
+.widget {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-raised); margin: 8px 0; overflow: hidden;
+}
+.widget-head {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; border-bottom: 1px solid var(--line-soft);
+}
+.widget-name { font-size: 12px; font-weight: 600; }
+.widget-meta {
+  margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+}
+.widget-gate, .widget-loading, .widget-err { padding: 12px 10px; font-size: 11.5px; color: var(--fg-dim); }
+.widget-gate code {
+  font-family: var(--mono); font-size: 11px; background: var(--bg-input);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
+.widget-err { color: var(--danger); font-family: var(--mono); font-size: 11px; }
+
+.w-metric { padding: 14px 12px 16px; display: flex; align-items: baseline; gap: 6px; }
+.w-metric-value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.w-metric-unit { font-size: 12px; color: var(--fg-dim); }
+
+.w-bars { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.w-bar-row { display: grid; grid-template-columns: 110px 1fr 46px; align-items: center; gap: 9px; }
+.w-bar-label {
+  font-size: 11.5px; color: var(--fg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.w-bar-track { height: 9px; background: var(--bg-input); border-radius: 4px; overflow: hidden; }
+/* 4px rounded data-end, anchored to the baseline */
+.w-bar-fill {
+  display: block; height: 100%; background: var(--series-1);
+  border-radius: 0 4px 4px 0; min-width: 3px;
+}
+.w-bar-value {
+  font-family: var(--mono); font-size: 11px; text-align: right;
+  font-variant-numeric: tabular-nums; color: var(--fg);
+}
+
+.w-grid {
+  padding: 10px 12px 12px; display: grid; gap: 7px;
+  grid-template-columns: repeat(auto-fill, minmax(134px, 1fr));
+}
+.w-cell {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 6px;
+  border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px;
+  background: var(--bg-input);
+}
+.w-cell-glyph { font-size: 10px; line-height: 1.5; }
+.w-cell-label {
+  font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.w-cell-status {
+  grid-column: 2; font-family: var(--mono); font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.w-cell-detail { grid-column: 2; font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+
+.w-table-wrap { overflow-x: auto; }
+.w-table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+.w-table th {
+  text-align: left; font-weight: 600; font-size: 10px; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--fg-faint);
+  padding: 7px 10px; border-bottom: 1px solid var(--line-soft); white-space: nowrap;
+}
+.w-table td {
+  padding: 5px 10px; border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-dim); white-space: nowrap;
+}
+.w-table tr:last-child td { border-bottom: 0; }
+
+.w-frame { width: 100%; border: 0; display: block; background: transparent; }
+
+.widget-activate {
+  background: none; border: 1px solid var(--line); color: var(--accent);
+  border-radius: 5px; padding: 1px 7px; font-size: 10.5px; font-weight: 600;
+}
+.widget-activate:hover { border-color: var(--accent); }
+
+.stream-widget { margin: 8px 0; }
+.widget-approve {
+  display: flex; align-items: center; gap: 9px;
+  margin: -7px 0 8px; padding: 6px 10px;
+  border: 1px solid var(--line); border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-input);
+  font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+}
+.widget-approve button { margin-left: auto; }

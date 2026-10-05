@@ -6,29 +6,17 @@ import {
   PresenceInput,
   SearchInput,
 } from "@bulletz/shared";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { actorForToken, bearerFrom } from "../auth.js";
+import { requireActor } from "../authHook.js";
 import { maybeOne, q } from "../db.js";
 import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
 import { contextPack, renderContextPack, search } from "../search.js";
 
-declare module "fastify" {
-  interface FastifyRequest {
-    actor: import("@bulletz/shared").Actor;
-  }
-}
-
 export async function apiRoutes(app: FastifyInstance) {
   // Every route below is authenticated as an actor; the log always knows who.
-  app.addHook("preHandler", async (req: FastifyRequest, reply: FastifyReply) => {
-    const token = bearerFrom(req.headers.authorization);
-    if (!token) return reply.code(401).send({ error: "missing bearer token" });
-    const actor = await actorForToken(token);
-    if (!actor) return reply.code(401).send({ error: "unknown token" });
-    req.actor = actor;
-  });
+  requireActor(app);
 
   app.get("/me", async (req) => ({ actor: req.actor }));
 

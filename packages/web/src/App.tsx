@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Thread } from "@bulletz/shared";
 import { Api, type Constraint, type Presence } from "./api.ts";
 import { TerminalPane, bridge } from "./Terminal.tsx";
+import { Widget, type WidgetRow } from "./Widget.tsx";
 
 const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
@@ -93,21 +94,24 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
   const [constraints, setConstraints] = useState<Constraint[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [presence, setPresence] = useState<Presence[]>([]);
+  const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [connected, setConnected] = useState(false);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
   const refreshMemory = useCallback(async () => {
-    const [d, c, t, p] = await Promise.all([
+    const [d, c, t, p, w] = await Promise.all([
       api.decisions(),
       api.constraints(),
       api.tasks(),
       api.presence(),
+      api.widgets(),
     ]);
     setDecisions(d.decisions);
     setConstraints(c.constraints);
     setTasks(t.tasks);
     setPresence(p.presence);
+    setWidgets(w.widgets as WidgetRow[]);
   }, [api]);
 
   useEffect(() => {
@@ -144,7 +148,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         } else if (type === "thread") {
           const th = m["thread"] as unknown as Thread;
           setThreads((prev) => (prev.some((p) => p.id === th.id) ? prev : [th, ...prev]));
-        } else if (type === "decision" || type === "task" || type === "presence") {
+        } else if (type === "decision" || type === "task" || type === "presence" || type === "widget") {
           void refreshMemory();
         }
       },
@@ -248,7 +252,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           <div className="center-top">
             <div className="pane-head">{active?.title ?? "No thread"}</div>
             <div className="pane-body">
-              <Stream events={events} />
+              <Stream events={events} widgets={widgets} api={api} onChange={refreshMemory} />
             </div>
             <Composer disabled={!activeId} onSubmit={submit} />
           </div>
@@ -259,6 +263,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           <div className="pane-head">Project memory</div>
           <div className="pane-body">
             <Memory decisions={decisions} constraints={constraints} tasks={tasks} />
+            <WidgetPanel widgets={widgets} api={api} onChange={refreshMemory} />
           </div>
         </div>
       </div>
@@ -315,7 +320,17 @@ function TerminalDock() {
   );
 }
 
-function Stream({ events }: { events: Event[] }) {
+function Stream({
+  events,
+  widgets,
+  api,
+  onChange,
+}: {
+  events: Event[];
+  widgets: WidgetRow[];
+  api: Api;
+  onChange: () => void;
+}) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -354,6 +369,16 @@ function Stream({ events }: { events: Event[] }) {
             </div>
           );
         }
+        if (e.kind === "widget") {
+          const wid = (e.payload as { widget_id?: string }).widget_id;
+          const w = widgets.find((x) => x.id === wid);
+          if (w)
+            return (
+              <div key={e.id} className="stream-widget">
+                <WidgetWithGate widget={w} api={api} onChange={onChange} />
+              </div>
+            );
+        }
         const why = (e.payload as { rationale?: string | null }).rationale;
         return (
           <div className={`sysev ${e.kind}`} key={e.id}>
@@ -369,6 +394,69 @@ function Stream({ events }: { events: Event[] }) {
         );
       })}
       <div ref={end} />
+    </div>
+  );
+}
+
+
+/** A draft widget shows its activation gate inline: an agent authored it, a
+ *  human decides whether it runs. */
+function WidgetWithGate({
+  widget,
+  api,
+  onChange,
+}: {
+  widget: WidgetRow;
+  api: Api;
+  onChange: () => void;
+}) {
+  const activate = async () => {
+    if (widget.tool_id && widget.tool_status !== "active") await api.activateTool(widget.tool_id);
+    await api.activateWidget(widget.id);
+    onChange();
+  };
+  return (
+    <>
+      <Widget widget={widget} api={api} />
+      {widget.status === "draft" && (
+        <div className="widget-approve">
+          <span>
+            Authored by {widget.created_by_handle}
+            {widget.tool_name ? ` · tool ${widget.tool_name}` : ""}
+          </span>
+          <button className="widget-activate" onClick={() => void activate()}>
+            Activate
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+function WidgetPanel({
+  widgets,
+  api,
+  onChange,
+}: {
+  widgets: WidgetRow[];
+  api: Api;
+  onChange: () => void;
+}) {
+  const pinned = widgets.filter((w) => w.pinned || w.status === "active");
+  return (
+    <div className="mem-group">
+      <div className="mem-label">
+        Widgets <span className="mem-count">{widgets.length}</span>
+      </div>
+      {widgets.length === 0 && <div className="empty">none — agents publish these</div>}
+      {pinned.map((w) => (
+        <Widget key={w.id} widget={w} api={api} />
+      ))}
+      {widgets
+        .filter((w) => w.status === "draft")
+        .map((w) => (
+          <WidgetWithGate key={w.id} widget={w} api={api} onChange={onChange} />
+        ))}
     </div>
   );
 }

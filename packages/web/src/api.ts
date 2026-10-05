@@ -57,6 +57,13 @@ export class Api {
     this.call<{ task: Task }>("POST", "/tasks", input);
   presence = () => this.call<{ presence: Presence[] }>("GET", "/presence");
 
+  widgets = () => this.call<{ widgets: unknown[] }>("GET", "/widgets");
+  widgetData = (id: string) => this.call<{ rows: unknown[]; ms: number }>("GET", `/widgets/${id}/data`);
+  widgetHtml = (id: string) => this.call<{ html: string }>("GET", `/widgets/${id}/html`);
+  activateWidget = (id: string) => this.call("POST", `/widgets/${id}/activate`, {});
+  tools = () => this.call<{ tools: unknown[] }>("GET", "/tools");
+  activateTool = (id: string) => this.call("POST", `/tools/${id}/activate`, {});
+
   stream(onMessage: (m: unknown) => void, onOpen: () => void, onClose: () => void) {
     const url = `${BASE.replace(/^http/, "ws")}/v1/stream?token=${encodeURIComponent(this.token)}`;
     const ws = new WebSocket(url);

@@ -50,6 +50,13 @@ context is a replayable *query* over the log, not a synced copy of it.
   `source_event_ids` so a caller can always drill back to raw events.
 - **Live state is never stored.** CI status, PR mergeability, deploy health are
   tool reads. Caching them means serving stale facts.
+- **Agents draft; humans activate.** An agent that can both author and run a
+  tool is a privilege-escalation path — untrusted text in a PR body becomes
+  "create a tool that exfiltrates, then call it". Tools and widgets are created
+  `draft`; activation is refused for any non-human actor (403).
+- **Widget refresh never touches a model.** A 30s tick re-invokes the tool
+  server-side and pushes rows. If refresh cost an inference the feature would be
+  unusable at any scale.
 - **Agents get their own identity.** An agent acts *for* a human
   (`actors.owner_actor_id`) but posts under its own handle. Nobody reading a
   thread has to guess whether a human wrote it.
@@ -63,7 +70,7 @@ context is a replayable *query* over the log, not a synced copy of it.
 | Retrieval: ranked union search + context packs | ✅ working |
 | MCP bridge — 12 tools, any MCP client | ✅ working |
 | Desktop app (Electron: chat + real pty terminal) | ✅ working |
-| Server-side tool registry + live views | ⬜ designed |
+| Server-side tool registry + embedded live views | ✅ working |
 | Rollups + extraction + pgvector hybrid | ⬜ designed |
 
 ## Quickstart
