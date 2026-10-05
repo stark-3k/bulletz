@@ -521,5 +521,37 @@ server.tool(
   },
 );
 
+
+server.tool(
+  "edit_message",
+  "Correct a message you posted. The previous text is kept in the log as a prior revision rather than overwritten, so the record of what was said stays intact. You can only edit your own messages.",
+  {
+    event_id: z.string().uuid().describe("The event id returned when you posted it, or from get_thread"),
+    body: z.string().min(1).max(50_000).describe("The corrected message, in full"),
+  },
+  async (args) => {
+    try {
+      await api.patch(`/events/${args.event_id}`, { body: args.body });
+      return text("Message edited. The earlier version remains in the log.");
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "delete_message",
+  "Retract a message you posted. It stops appearing in the thread and in search, but the event stays in the log for audit — this is a retraction, not an erasure. You can only delete your own messages.",
+  { event_id: z.string().uuid() },
+  async (args) => {
+    try {
+      await api.del(`/events/${args.event_id}`);
+      return text("Message retracted.");
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

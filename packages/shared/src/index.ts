@@ -65,6 +65,9 @@ export const Event = z.object({
   labels: z.array(z.string()),
   seq: z.string(),
   created_at: z.string(),
+  revision_of: z.string().uuid().nullable().optional(),
+  root_id: z.string().uuid().optional(),
+  edited: z.boolean().optional(),
 });
 export type Event = z.infer<typeof Event>;
 

@@ -48,6 +48,10 @@ export async function search(
              array[e.id::text] as source_event_ids
         from events e join actors a on a.id = e.actor_id, tsq
        where e.workspace_id = $1 and e.search @@ tsq.query
+         -- heads only: a superseded revision must not surface as current, and
+         -- a tombstoned message must not surface at all
+         and not exists (select 1 from events n where n.revision_of = e.id)
+         and e.kind <> 'message_deleted'
          and ($3::uuid is null or e.thread_id = $3::uuid)
          and ($4::text[] is null or e.kind = any($4::text[]))
          and ($5::timestamptz is null or e.created_at >= $5::timestamptz)

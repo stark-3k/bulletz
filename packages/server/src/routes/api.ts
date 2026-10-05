@@ -139,6 +139,60 @@ export async function apiRoutes(app: FastifyInstance) {
     return reply.code(201).send({ event });
   });
 
+  /** Edit. Appends a revision rather than mutating: the prior text stays in
+   *  the log, so what an agent read at the time is still reconstructible.
+   *  Only the original sender may revise their own message. */
+  app.patch("/events/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z.object({ body: z.string().min(1).max(100_000) }).parse(req.body);
+
+    const head = await repo.eventHead(req.actor.workspace_id, id);
+    if (!head) return reply.code(404).send({ error: "event not found" });
+    if (head.actor_id !== req.actor.id) {
+      return reply.code(403).send({ error: "only the sender can edit this message" });
+    }
+    if (head.kind === "message_deleted") {
+      return reply.code(409).send({ error: "message was deleted" });
+    }
+    if (head.kind !== "message") {
+      return reply.code(400).send({ error: `only messages are editable (this is ${head.kind})` });
+    }
+
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: head.thread_id,
+      actorId: req.actor.id,
+      kind: "message",
+      body: body.body,
+      revisionOf: head.id,
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { event };
+  });
+
+  /** Delete. A tombstone revision, not an erasure: the row survives for audit.
+   *  Real redaction (overwriting the stored text) is a separate feature. */
+  app.delete("/events/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const head = await repo.eventHead(req.actor.workspace_id, id);
+    if (!head) return reply.code(404).send({ error: "event not found" });
+    if (head.actor_id !== req.actor.id) {
+      return reply.code(403).send({ error: "only the sender can delete this message" });
+    }
+    if (head.kind === "message_deleted") return { event: null, already: true };
+
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: head.thread_id,
+      actorId: req.actor.id,
+      kind: "message_deleted",
+      body: null,
+      revisionOf: head.id,
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { event };
+  });
+
   /* ------------------------------ decisions ------------------------------ */
 
   app.get("/decisions", async (req) => {

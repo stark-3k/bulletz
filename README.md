@@ -56,6 +56,13 @@ context is a replayable *query* over the log, not a synced copy of it.
   under either would dilute them. The bar for `project_links`: it must *not* be
   derivable from the checkout. The agent has the files; it does not know the
   production URL or which dashboard shows the error budget.
+- **Edits are events, not mutations.** Editing a message appends a revision
+  pointing at the one it replaces; deleting appends a tombstone. Reads resolve
+  to the head of the chain, so the thread shows current text while every prior
+  version stays in the log — what an agent read at the time is still
+  reconstructible. Only the sender may revise their own message. A tombstone
+  hides content from every read path but is *not* erasure; real redaction is a
+  separate feature.
 - **Memory is revocable, not rewritable.** Decisions are superseded, never
   edited; constraints are retired, never deleted. Both stay in the log — the
   record of what was once believed survives, while only what is currently true

@@ -557,3 +557,36 @@ button { font: inherit; cursor: pointer; }
 .panes.panes-apps.mem-collapsed { grid-template-columns: 1fr 34px; }
 .mem-pane { overflow: hidden; }
 .mem-collapsed .mem-pane .pane-head { padding: 9px 7px; justify-content: center; }
+
+/* --------------------------- message revisions -------------------------- */
+
+.msg-edited {
+  font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; cursor: help;
+}
+.msg-actions { margin-left: auto; display: none; gap: 4px; }
+.msg:hover .msg-actions { display: flex; }
+.msg-actions button {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--fg-faint); font-size: 10px; padding: 1px 6px;
+}
+.msg-actions button:hover { color: var(--fg); border-color: var(--fg-faint); }
+.msg-actions button.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+.msg-edit { margin-top: 3px; }
+.msg-edit textarea {
+  width: 100%; min-height: 56px; resize: vertical;
+  background: var(--bg-input); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--fg); font: inherit; padding: 7px 9px; outline: none;
+}
+.msg-edit-bar { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.msg-edit-bar button:not(.send) {
+  background: none; border: 1px solid var(--line); border-radius: 5px;
+  color: var(--fg-dim); font-size: 11.5px; padding: 3px 9px;
+}
+.msg-edit-hint { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+
+.msg.tombstone .avatar.ghost {
+  background: transparent; border: 1px dashed var(--line); color: var(--fg-faint);
+}
+.msg-deleted { font-size: 12.5px; color: var(--fg-faint); font-style: italic; }

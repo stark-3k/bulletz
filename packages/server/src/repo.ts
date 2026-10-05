@@ -4,7 +4,24 @@ import { maybeOne, one, q } from "./db.js";
 const EVENT_COLS = `
   e.id, e.workspace_id, e.thread_id, e.actor_id, a.handle as actor_handle,
   a.kind as actor_kind, e.kind, e.body, e.payload, e.refs, e.labels,
-  e.seq::text as seq, e.created_at`;
+  e.seq::text as seq, e.created_at, e.revision_of,
+  coalesce(r.root_id, e.id) as root_id,
+  (e.revision_of is not null) as edited`;
+
+/** A revision chain's head is the event nothing points at. Reads resolve to
+ *  heads so the UI shows the current text, while every prior version stays in
+ *  the log. Ordering follows the ROOT's seq, so an edited message keeps its
+ *  place in the conversation instead of jumping to the end. */
+const HEAD_ONLY = `not exists (select 1 from events n where n.revision_of = e.id)`;
+
+const ROOT_CTE = `
+  with recursive chain as (
+    select id, revision_of, id as root_id, seq as root_seq from events where revision_of is null
+    union all
+    select e.id, e.revision_of, c.root_id, c.root_seq
+      from events e join chain c on e.revision_of = c.id
+  )
+  select id as rid, root_id, root_seq from chain`;
 
 /* -------------------------------- threads -------------------------------- */
 
@@ -44,18 +61,21 @@ export async function appendEvent(input: {
   threadId: string | null;
   actorId: string;
   kind: string;
-  body?: string | undefined;
+  body?: string | null | undefined;
   payload?: Record<string, unknown>;
   refs?: Record<string, unknown>;
   labels?: string[];
+  revisionOf?: string | null;
 }): Promise<Event> {
   const row = await one<Event>(
     `with ins as (
-       insert into events (workspace_id, thread_id, actor_id, kind, body, payload, refs, labels)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[])
+       insert into events (workspace_id, thread_id, actor_id, kind, body, payload, refs, labels, revision_of)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[], $9)
        returning *
-     )
-     select ${EVENT_COLS} from ins e join actors a on a.id = e.actor_id`,
+     ), roots as (${ROOT_CTE})
+     select ${EVENT_COLS} from ins e
+       join actors a on a.id = e.actor_id
+       left join roots r on r.rid = e.id`,
     [
       input.workspaceId,
       input.threadId,
@@ -65,6 +85,7 @@ export async function appendEvent(input: {
       JSON.stringify(input.payload ?? {}),
       JSON.stringify(input.refs ?? {}),
       input.labels ?? [],
+      input.revisionOf ?? null,
     ],
   );
   if (input.threadId) {
@@ -80,11 +101,15 @@ export async function threadEvents(
 ): Promise<Event[]> {
   const limit = opts.limit ?? 100;
   const rows = await q<Event>(
-    `select ${EVENT_COLS}
-       from events e join actors a on a.id = e.actor_id
+    `with roots as (${ROOT_CTE})
+     select ${EVENT_COLS}
+       from events e
+       join actors a on a.id = e.actor_id
+       left join roots r on r.rid = e.id
       where e.workspace_id = $1 and e.thread_id = $2
-        and ($3::bigint is null or e.seq < $3::bigint)
-      order by e.seq desc limit $4`,
+        and ${HEAD_ONLY}
+        and ($3::bigint is null or coalesce(r.root_seq, e.seq) < $3::bigint)
+      order by coalesce(r.root_seq, e.seq) desc limit $4`,
     [workspaceId, threadId, opts.beforeSeq ?? null, limit],
   );
   return rows.reverse();
@@ -92,9 +117,13 @@ export async function threadEvents(
 
 export async function recentEvents(workspaceId: string, limit = 50): Promise<Event[]> {
   const rows = await q<Event>(
-    `select ${EVENT_COLS}
-       from events e join actors a on a.id = e.actor_id
-      where e.workspace_id = $1 order by e.seq desc limit $2`,
+    `with roots as (${ROOT_CTE})
+     select ${EVENT_COLS}
+       from events e
+       join actors a on a.id = e.actor_id
+       left join roots r on r.rid = e.id
+      where e.workspace_id = $1 and ${HEAD_ONLY}
+      order by e.seq desc limit $2`,
     [workspaceId, limit],
   );
   return rows.reverse();
@@ -341,5 +370,23 @@ export async function retireProjectLink(workspaceId: string, label: string) {
     `update project_links set status = 'retired'
       where workspace_id = $1 and label = $2 returning id, label, status`,
     [workspaceId, label],
+  );
+}
+
+/** Returns the head of the chain this event belongs to, with its author — the
+ *  only row an edit or delete may target. */
+export async function eventHead(workspaceId: string, eventId: string) {
+  return maybeOne<{ id: string; actor_id: string; kind: string; thread_id: string | null; body: string | null }>(
+    `with recursive chain as (
+       select id, revision_of, actor_id, kind, thread_id, body, workspace_id from events
+        where id = $2 and workspace_id = $1
+       union all
+       select e.id, e.revision_of, e.actor_id, e.kind, e.thread_id, e.body, e.workspace_id
+         from events e join chain c on e.revision_of = c.id
+     )
+     select id, actor_id, kind, thread_id, body from chain c
+      where not exists (select 1 from events n where n.revision_of = c.id)
+      limit 1`,
+    [workspaceId, eventId],
   );
 }

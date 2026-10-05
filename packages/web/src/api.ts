@@ -55,13 +55,18 @@ export class Api {
     return text ? (JSON.parse(text) as T) : ({} as T);
   }
 
-  me = () => this.call<{ actor: { handle: string; kind: string; workspace_id: string } }>("GET", "/me");
+  me = () =>
+    this.call<{ actor: { id: string; handle: string; kind: string; workspace_id: string } }>("GET", "/me");
   threads = () => this.call<{ threads: Thread[] }>("GET", "/threads");
   createThread = (title: string) => this.call<{ thread: Thread }>("POST", "/threads", { title });
   threadEvents = (id: string) =>
     this.call<{ thread: Thread; events: Event[] }>("GET", `/threads/${id}/events?limit=200`);
   postMessage = (threadId: string, body: string) =>
     this.call<{ event: Event }>("POST", "/events", { thread_id: threadId, kind: "message", body });
+  editMessage = (id: string, body: string) =>
+    this.call<{ event: Event }>("PATCH", `/events/${id}`, { body });
+  deleteMessage = (id: string) => this.call("DELETE", `/events/${id}`);
+
   decisions = () => this.call<{ decisions: Decision[] }>("GET", "/decisions?include_superseded=true");
   createDecision = (input: { statement: string; rationale?: string; thread_id?: string }) =>
     this.call<{ decision: Decision }>("POST", "/decisions", input);

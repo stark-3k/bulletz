@@ -16,7 +16,7 @@ export function App() {
   const [token, setToken] = useState(
     () => localStorage.getItem(TOKEN_KEY) ?? import.meta.env.VITE_BULLETZ_TOKEN ?? "",
   );
-  const [me, setMe] = useState<{ handle: string; kind: string } | null>(null);
+  const [me, setMe] = useState<{ id: string; handle: string; kind: string } | null>(null);
   const [authErr, setAuthErr] = useState("");
 
   const api = useMemo(() => (token ? new Api(token) : null), [token]);
@@ -87,7 +87,7 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
   );
 }
 
-function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string } }) {
+function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; kind: string } }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
@@ -146,7 +146,20 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         if (type === "event") {
           const ev = m["event"] as unknown as Event;
           if (ev.thread_id && ev.thread_id === activeRef.current) {
-            setEvents((prev) => (prev.some((p) => p.id === ev.id) ? prev : [...prev, ev]));
+            setEvents((prev) => {
+              if (prev.some((p) => p.id === ev.id)) return prev;
+              // A revision supersedes the event it points at, in place, so an
+              // edit does not jump the message to the bottom of the thread.
+              if (ev.revision_of) {
+                const idx = prev.findIndex((p) => p.id === ev.revision_of);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = ev;
+                  return next;
+                }
+              }
+              return [...prev, ev];
+            });
           }
           setThreads((prev) =>
             prev
@@ -290,7 +303,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         <div className="pane">
           <div className="pane-head">{active?.title ?? "No thread"}</div>
           <div className="pane-body">
-            <Stream events={events} widgets={widgets} api={api} onChange={refreshMemory} />
+            <Stream events={events} widgets={widgets} api={api} me={me} onChange={refreshMemory} />
           </div>
           <Composer disabled={!activeId} onSubmit={submit} />
         </div>
@@ -382,11 +395,13 @@ function Stream({
   events,
   widgets,
   api,
+  me,
   onChange,
 }: {
   events: Event[];
   widgets: WidgetRow[];
   api: Api;
+  me: { id: string };
   onChange: () => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
@@ -398,7 +413,24 @@ function Stream({
     <div className="stream">
       {events.length === 0 && <div className="empty">Nothing in this thread yet.</div>}
       {events.map((e) => {
+        if (e.kind === "message_deleted") {
+          return (
+            <div className="msg tombstone" key={e.id}>
+              <div className="avatar ghost">—</div>
+              <div className="msg-main">
+                <div className="msg-head">
+                  <span className="msg-who">{e.actor_handle}</span>
+                  <span className="msg-time">{time(e.created_at)}</span>
+                </div>
+                <div className="msg-deleted">message deleted</div>
+              </div>
+            </div>
+          );
+        }
         if (e.kind === "message") {
+          return <Message key={e.id} e={e} mine={e.actor_id === me.id} api={api} />;
+        }
+        if (false as boolean) {
           const isAgent = e.actor_kind === "agent";
           const refs = [
             ...((e.refs.paths as string[] | undefined) ?? []),
@@ -588,6 +620,95 @@ function ProjectCard({ project }: { project: Project | null }) {
         </div>
       )}
     </Section>
+  );
+}
+
+
+/** A message, with its own revision controls. Edits and deletes are appended
+ *  to the log as new events, so "edited" is a fact about the chain, not a
+ *  mutation of the original. */
+function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(e.body ?? "");
+  const [busy, setBusy] = useState(false);
+  const isAgent = e.actor_kind === "agent";
+  const refs = [
+    ...((e.refs.paths as string[] | undefined) ?? []),
+    ...((e.refs.prs as string[] | undefined) ?? []),
+  ];
+
+  const save = async () => {
+    const next = draft.trim();
+    if (!next || next === e.body || busy) return setEditing(false);
+    setBusy(true);
+    try {
+      await api.editMessage(e.id, next);
+      setEditing(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.deleteMessage(e.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="msg">
+      <div className={`avatar${isAgent ? " agent" : ""}`}>{initials(e.actor_handle ?? "?")}</div>
+      <div className="msg-main">
+        <div className="msg-head">
+          <span className={`msg-who${isAgent ? " agent" : ""}`}>{e.actor_handle}</span>
+          {isAgent && <span className="badge">agent</span>}
+          <span className="msg-time">{time(e.created_at)}</span>
+          {e.edited && <span className="msg-edited" title="edited — earlier versions remain in the log">edited</span>}
+          {mine && !editing && (
+            <span className="msg-actions">
+              <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
+              <button className="danger" onClick={() => void remove()}>Delete</button>
+            </span>
+          )}
+        </div>
+
+        {editing ? (
+          <div className="msg-edit">
+            <textarea
+              autoFocus
+              value={draft}
+              onChange={(ev) => setDraft(ev.target.value)}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter" && !ev.shiftKey) {
+                  ev.preventDefault();
+                  void save();
+                }
+                if (ev.key === "Escape") setEditing(false);
+              }}
+            />
+            <div className="msg-edit-bar">
+              <button className="send" onClick={() => void save()} disabled={busy}>Save</button>
+              <button onClick={() => setEditing(false)}>Cancel</button>
+              <span className="msg-edit-hint">Enter to save · Esc to cancel</span>
+            </div>
+          </div>
+        ) : (
+          <div className="msg-body">{e.body}</div>
+        )}
+
+        {refs.length > 0 && !editing && (
+          <div className="msg-refs">
+            {refs.map((r) => (
+              <span className="ref" key={r}>{r}</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
