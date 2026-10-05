@@ -187,8 +187,13 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
   useEffect(() => {
     const b = bridge();
     if (!b?.agent) return;
-    void b.agent.policy().then(setPolicy);
-    return b.agent.onEvent((threadId, e: AgentRunEvent) => {
+    // The policy file is the source of truth and can change outside this
+    // window, so re-read it on focus rather than trusting a mount-time copy —
+    // a chip that lies about whether chat can start a run is worse than none.
+    const refresh = () => void b.agent?.policy().then(setPolicy);
+    refresh();
+    window.addEventListener("focus", refresh);
+    const off = b.agent.onEvent((threadId, e: AgentRunEvent) => {
       const status =
         e.type === "start" ? `running · ${e.model}`
         : e.type === "tool" ? `${e.name}…`
@@ -199,6 +204,10 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       setAgentRun({ threadId, status });
       if (e.type === "end" || e.type === "error") setTimeout(() => setAgentRun(null), 6000);
     });
+    return () => {
+      window.removeEventListener("focus", refresh);
+      off();
+    };
   }, []);
 
   const active = threads.find((t) => t.id === activeId) ?? null;
