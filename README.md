@@ -62,7 +62,7 @@ context is a replayable *query* over the log, not a synced copy of it.
 | REST API + WebSocket fanout | ✅ working |
 | Retrieval: ranked union search + context packs | ✅ working |
 | MCP bridge — 12 tools, any MCP client | ✅ working |
-| Desktop app (Electron: chat + terminal + embedded MCP) | ⬜ next |
+| Desktop app (Electron: chat + real pty terminal) | ✅ working |
 | Server-side tool registry + live views | ⬜ designed |
 | Rollups + extraction + pgvector hybrid | ⬜ designed |
 
@@ -121,7 +121,27 @@ summarization layers will not save it. Stop and rethink.
 packages/shared    types + zod schemas shared by every package
 packages/server    Fastify + Postgres: the log, projections, retrieval, realtime
 packages/mcp       the portable bridge — stdio MCP server over the HTTP API
+packages/web       the renderer: chat, project memory, terminal pane
+packages/desktop   Electron shell: owns the pty and local git status
 ```
+
+## The desktop app
+
+```bash
+npm run dev            # server + web
+npm run desktop:rebuild   # once: node-pty against Electron's ABI
+npm run dev:desktop
+```
+
+The terminal is why this is a desktop app rather than a web app: a real pty
+cannot exist in a browser tab. The shell it spawns inherits `BULLETZ_TOKEN` and
+opens in the project root, so `claude` started there reaches this workspace
+through `.mcp.json` with no further setup — the agent on your machine and the
+chat on the server are the same conversation.
+
+`contextIsolation` is on and `nodeIntegration` is off; the renderer's entire
+privileged surface is the preload bridge (pty I/O plus an allowlisted local
+git status — branch, dirty count, cwd — and never file contents).
 
 ## Deliberately not built
 

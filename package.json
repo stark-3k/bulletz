@@ -19,6 +19,8 @@
     "dev:server": "npm run dev -w @bulletz/server",
     "dev:mcp": "npm run dev -w @bulletz/mcp",
     "dev:web": "npm run dev -w @bulletz/web",
-    "dev": "npm run dev:server & npm run dev:web"
+    "dev": "npm run dev:server & npm run dev:web",
+    "dev:desktop": "npm run dev -w @bulletz/desktop",
+    "desktop:rebuild": "npm run rebuild -w @bulletz/desktop"
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Thread } from "@bulletz/shared";
 import { Api, type Constraint, type Presence } from "./api.ts";
+import { TerminalPane, bridge } from "./Terminal.tsx";
 
 const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
@@ -243,12 +244,15 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           </div>
         </div>
 
-        <div className="pane">
-          <div className="pane-head">{active?.title ?? "No thread"}</div>
-          <div className="pane-body">
-            <Stream events={events} />
+        <div className="pane center-split">
+          <div className="center-top">
+            <div className="pane-head">{active?.title ?? "No thread"}</div>
+            <div className="pane-body">
+              <Stream events={events} />
+            </div>
+            <Composer disabled={!activeId} onSubmit={submit} />
           </div>
-          <Composer disabled={!activeId} onSubmit={submit} />
+          <TerminalDock />
         </div>
 
         <div className="pane">
@@ -259,6 +263,55 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         </div>
       </div>
     </div>
+  );
+}
+
+
+/** The terminal is why this is a desktop app: a real pty cannot exist in a
+ *  browser tab. Its shell inherits BULLETZ_TOKEN, so `claude` started here
+ *  reaches this workspace through the repo's .mcp.json with no extra setup. */
+function TerminalDock() {
+  const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
+  const [open, setOpen] = useState(() => localStorage.getItem("bulletz.termOpen") !== "0");
+  const [dragging, setDragging] = useState(false);
+  const desktop = bridge() !== null;
+
+  useEffect(() => localStorage.setItem("bulletz.termH", String(height)), [height]);
+  useEffect(() => localStorage.setItem("bulletz.termOpen", open ? "1" : "0"), [open]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e: MouseEvent) => {
+      const next = window.innerHeight - e.clientY - 4;
+      setHeight(Math.max(90, Math.min(next, window.innerHeight - 220)));
+    };
+    const up = () => setDragging(false);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [dragging]);
+
+  return (
+    <>
+      <div
+        className={`term-resizer${dragging ? " dragging" : ""}`}
+        onMouseDown={() => open && setDragging(true)}
+      />
+      <div className="term-panel" style={{ height: open ? height : 28 }}>
+        <div className="pane-head" style={{ borderBottom: "none", paddingBottom: 6 }}>
+          <div className="tab-row">
+            <button className="tab active">Terminal</button>
+          </div>
+          <button className="icon-btn" onClick={() => setOpen((v) => !v)} title={open ? "Hide" : "Show"}>
+            {open ? "\u2013" : "+"}
+          </button>
+        </div>
+        {open && (desktop ? <TerminalPane id="main" /> : <TerminalPane id="main" />)}
+      </div>
+    </>
   );
 }
 

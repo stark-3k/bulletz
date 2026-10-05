@@ -274,3 +274,46 @@ button { font: inherit; cursor: pointer; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #232a3b; border-radius: 5px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #2e374c; }
+
+/* ------------------------------- terminal ------------------------------ */
+
+.center-split { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.center-top { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+.term-resizer {
+  height: 5px; flex: none; cursor: row-resize;
+  background: var(--line); position: relative;
+}
+.term-resizer:hover, .term-resizer.dragging { background: var(--accent); }
+
+.term-panel { flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+
+.term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.term-bar {
+  display: flex; align-items: center; gap: 7px; flex: none;
+  padding: 5px 12px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint);
+}
+.term-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--decision); flex: none; }
+.term-cwd { color: var(--fg-dim); }
+.term-exit { margin-left: auto; color: var(--danger); }
+.term-host { flex: 1; min-height: 0; padding: 6px 10px; overflow: hidden; }
+.term-host .xterm { height: 100%; }
+.term-host .xterm-viewport { overflow-y: auto !important; background: transparent !important; }
+
+.term-unavailable { padding: 16px 18px; }
+.term-unavailable-title { font-size: 12.5px; font-weight: 600; margin-bottom: 5px; }
+.term-unavailable-body { font-size: 11.5px; color: var(--fg-dim); max-width: 520px; line-height: 1.6; }
+.term-unavailable-body code {
+  font-family: var(--mono); font-size: 11px; background: var(--bg-input);
+  border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; color: var(--fg);
+}
+
+.tab-row { display: flex; align-items: center; gap: 2px; }
+.tab {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--fg-faint); padding: 3px 9px 4px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase;
+}
+.tab:hover { color: var(--fg-dim); }
+.tab.active { color: var(--fg); border-bottom-color: var(--accent); }
