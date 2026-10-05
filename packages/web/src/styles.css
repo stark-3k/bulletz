@@ -590,3 +590,13 @@ button { font: inherit; cursor: pointer; }
   background: transparent; border: 1px dashed var(--line); color: var(--fg-faint);
 }
 .msg-deleted { font-size: 12.5px; color: var(--fg-faint); font-style: italic; }
+
+/* An armed delete stays visible while confirming, so the row cannot be
+   un-hovered into a half-committed state. */
+.msg .msg-actions.confirming { display: flex; }
+.confirm-ask { font-size: 10.5px; color: var(--fg-dim); align-self: center; }
+.msg-actions button.danger.solid {
+  background: var(--danger); border-color: var(--danger); color: #1a0d0d; font-weight: 600;
+}
+.msg-actions button.danger.solid:hover { background: #ff8080; border-color: #ff8080; color: #1a0d0d; }
+.msg-actions button:disabled { opacity: 0.6; cursor: default; }

@@ -631,7 +631,21 @@ function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.body ?? "");
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const isAgent = e.actor_kind === "agent";
+
+  // The confirm state reverts on its own: an armed Delete button left hanging
+  // in a thread is a trap the next time someone reaches for the row.
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 5000);
+    const esc = (ev: KeyboardEvent) => ev.key === "Escape" && setConfirming(false);
+    window.addEventListener("keydown", esc);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [confirming]);
   const refs = [
     ...((e.refs.paths as string[] | undefined) ?? []),
     ...((e.refs.prs as string[] | undefined) ?? []),
@@ -654,6 +668,7 @@ function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
     setBusy(true);
     try {
       await api.deleteMessage(e.id);
+      setConfirming(false);
     } finally {
       setBusy(false);
     }
@@ -669,9 +684,21 @@ function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
           <span className="msg-time">{time(e.created_at)}</span>
           {e.edited && <span className="msg-edited" title="edited — earlier versions remain in the log">edited</span>}
           {mine && !editing && (
-            <span className="msg-actions">
-              <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
-              <button className="danger" onClick={() => void remove()}>Delete</button>
+            <span className={`msg-actions${confirming ? " confirming" : ""}`}>
+              {confirming ? (
+                <>
+                  <span className="confirm-ask">Delete this message?</span>
+                  <button className="danger solid" autoFocus disabled={busy} onClick={() => void remove()}>
+                    {busy ? "Deleting…" : "Delete"}
+                  </button>
+                  <button onClick={() => setConfirming(false)}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
+                  <button className="danger" onClick={() => setConfirming(true)}>Delete</button>
+                </>
+              )}
             </span>
           )}
         </div>
