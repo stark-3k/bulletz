@@ -71,6 +71,8 @@ export class Api {
   tasks = () => this.call<{ tasks: Task[] }>("GET", "/tasks");
   createTask = (input: { title: string; thread_id?: string }) =>
     this.call<{ task: Task }>("POST", "/tasks", input);
+  updateTask = (id: string, status: string) =>
+    this.call<{ task: Task }>("PATCH", `/tasks/${id}`, { status });
   presence = () => this.call<{ presence: Presence[] }>("GET", "/presence");
 
   project = () => this.call<Project>("GET", "/project");

@@ -3,6 +3,7 @@ import type { Decision, Event, Task, Thread } from "@bulletz/shared";
 import { Api, type Constraint, type Presence, type Project } from "./api.ts";
 import { TerminalPane, bridge } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
+import { Apps } from "./Apps.tsx";
 
 const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
@@ -96,6 +97,9 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
   const [presence, setPresence] = useState<Presence[]>([]);
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [surface, setSurface] = useState<"chat" | "apps">(
+    () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
+  );
   const [connected, setConnected] = useState(false);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
@@ -218,6 +222,20 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           <span className="logo-dot" />
           bulletz
         </div>
+        <div className="nav">
+          {(["chat", "apps"] as const).map((s) => (
+            <button
+              key={s}
+              className={`nav-btn${surface === s ? " active" : ""}`}
+              onClick={() => {
+                setSurface(s);
+                localStorage.setItem("bulletz.surface", s);
+              }}
+            >
+              {s === "chat" ? "Chat" : "Apps"}
+            </button>
+          ))}
+        </div>
         <span className="sep" />
         <div className="conn">
           <span className={`conn-dot${connected ? " on" : ""}`} />
@@ -225,7 +243,11 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         </div>
       </div>
 
-      <div className="panes">
+      <div className={surface === "apps" ? "panes panes-apps" : "panes"}>
+        {surface === "apps" ? (
+          <Apps api={api} tasks={tasks} widgets={widgets} onChange={refreshMemory} />
+        ) : (
+        <>
         <div className="pane">
           <div className="pane-head">
             Threads
@@ -272,6 +294,9 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
           </div>
           <TerminalDock />
         </div>
+        </>
+
+        )}
 
         <div className="pane">
           <div className="pane-head">Project memory</div>

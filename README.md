@@ -60,6 +60,11 @@ context is a replayable *query* over the log, not a synced copy of it.
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created
   `draft`; activation is refused for any non-human actor (403).
+- **Two surfaces, one state.** Chat is the narrative; Apps is the workspace.
+  A widget inline in a thread is an attachment; the same widget in Apps gets
+  the whole canvas. Built-in apps (task board, registry) sit beside
+  agent-published ones because to the person using them there is no difference.
+  Everything a board does still writes through the log.
 - **Widget refresh never touches a model.** A 30s tick re-invokes the tool
   server-side and pushes rows. If refresh cost an inference the feature would be
   unusable at any scale.
@@ -77,6 +82,7 @@ context is a replayable *query* over the log, not a synced copy of it.
 | MCP bridge — 12 tools, any MCP client | ✅ working |
 | Desktop app (Electron: chat + real pty terminal) | ✅ working |
 | Server-side tool registry + embedded live views | ✅ working |
+| Apps surface (task board, registry, full-size widgets) | ✅ working |
 | Rollups + extraction + pgvector hybrid | ⬜ designed |
 
 ## Quickstart
