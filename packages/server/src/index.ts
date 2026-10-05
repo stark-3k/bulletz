@@ -1,6 +1,7 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { WebSocketServer } from "ws";
+import { ZodError } from "zod";
 import { actorForToken } from "./auth.js";
 import { pool } from "./db.js";
 import { env } from "./env.js";
@@ -11,6 +12,22 @@ import { widgetRoutes } from "./routes/widgets.js";
 const app = Fastify({ logger: { level: env.logLevel } });
 
 await app.register(cors, { origin: true });
+
+// A malformed request is the client's fault, not a server crash. Without this
+// every validation failure surfaced as a 500, which buries real faults in
+// noise and tells the caller nothing about what it got wrong.
+app.setErrorHandler((err, _req, reply) => {
+  if (err instanceof ZodError) {
+    return reply.code(400).send({
+      error: "invalid request",
+      issues: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    });
+  }
+  const e = err as { statusCode?: number; message?: string };
+  const status = e.statusCode ?? 500;
+  if (status >= 500) app.log.error({ err }, "unhandled error");
+  return reply.code(status).send({ error: e.message || "internal error" });
+});
 
 app.get("/health", async () => {
   const { rows } = await pool.query<{ n: number }>("select 1 as n");

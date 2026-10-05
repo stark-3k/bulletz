@@ -112,7 +112,9 @@ export const PostEventInput = z.object({
   thread_id: z.string().uuid().optional(),
   thread_title: z.string().min(1).max(200).optional(),
   kind: z.string().default("message"),
-  body: z.string().max(100_000).optional(),
+  // Nullable, not merely optional: marker events (agent_turn_start/end,
+  // tombstones) carry their meaning in `kind` + `payload` and have no body.
+  body: z.string().max(100_000).nullish(),
   payload: z.record(z.unknown()).default({}),
   refs: Refs.default({}),
   labels: z.array(z.string()).default([]),

@@ -623,3 +623,14 @@ button { font: inherit; cursor: pointer; }
 .policy-chip:hover { color: var(--fg-dim); border-color: var(--fg-faint); }
 .policy-chip.on { color: var(--agent); border-color: #3d3058; }
 .composer-hint { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+/* Turn markers: a rule, not a message. */
+.turn-rule {
+  display: flex; align-items: center; gap: 9px;
+  margin: 10px 0 6px; font-family: var(--mono);
+  font-size: 9.5px; letter-spacing: 0.04em; color: var(--fg-faint);
+}
+.turn-rule::before, .turn-rule::after {
+  content: ""; height: 1px; background: var(--line-soft); flex: 1;
+}
+.turn-rule::before { max-width: 14px; }

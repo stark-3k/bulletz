@@ -525,6 +525,20 @@ function Stream({
               </div>
             );
         }
+        // Turn markers carry their meaning in the payload, not a body — render
+        // them as a thin rule rather than an empty-looking message row.
+        if (e.kind === "agent_turn_start" || e.kind === "agent_turn_end") {
+          const p = e.payload as { model?: string; cost_usd?: number | null; subtype?: string };
+          const label =
+            e.kind === "agent_turn_start"
+              ? `${e.actor_handle} started a turn${p.model ? ` · ${p.model}` : ""}`
+              : `turn ${p.subtype ?? "ended"}${p.cost_usd ? ` · $${p.cost_usd.toFixed(3)}` : ""}`;
+          return (
+            <div className="turn-rule" key={e.id}>
+              <span>{label}</span>
+            </div>
+          );
+        }
         const why = (e.payload as { rationale?: string | null }).rationale;
         return (
           <div className={`sysev ${e.kind}`} key={e.id}>
