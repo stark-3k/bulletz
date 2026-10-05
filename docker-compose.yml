@@ -1,0 +1,19 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: bulletz-db
+    environment:
+      POSTGRES_USER: bulletz
+      POSTGRES_PASSWORD: bulletz
+      POSTGRES_DB: bulletz
+    ports:
+      - "5433:5432"
+    volumes:
+      - bulletz-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bulletz -d bulletz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  bulletz-pgdata:

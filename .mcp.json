@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bulletz": {
+      "command": "node",
+      "args": ["packages/mcp/dist/index.js"],
+      "env": {
+        "BULLETZ_SERVER_URL": "${BULLETZ_SERVER_URL:-http://127.0.0.1:4000}",
+        "BULLETZ_TOKEN": "${BULLETZ_TOKEN}"
+      }
+    }
+  }
+}
