@@ -4,3 +4,6 @@ dist/
 .env
 .DS_Store
 out/
+
+# web dev env
+packages/web/.env.local

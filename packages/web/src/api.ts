@@ -1,0 +1,69 @@
+import type { Decision, Event, Task, Thread } from "@bulletz/shared";
+
+const BASE = import.meta.env.VITE_BULLETZ_URL ?? "http://localhost:4000";
+
+export type Constraint = {
+  id: string;
+  rule: string;
+  rationale: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type Presence = {
+  handle: string;
+  kind: string;
+  display_name: string;
+  branch: string | null;
+  cwd: string | null;
+  dirty_files: number | null;
+  test_status: string | null;
+  agent_kind: string | null;
+  online: boolean;
+};
+
+export class Api {
+  constructor(private token: string) {}
+
+  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const res = await fetch(`${BASE}/v1${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const text = await res.text();
+    return text ? (JSON.parse(text) as T) : ({} as T);
+  }
+
+  me = () => this.call<{ actor: { handle: string; kind: string; workspace_id: string } }>("GET", "/me");
+  threads = () => this.call<{ threads: Thread[] }>("GET", "/threads");
+  createThread = (title: string) => this.call<{ thread: Thread }>("POST", "/threads", { title });
+  threadEvents = (id: string) =>
+    this.call<{ thread: Thread; events: Event[] }>("GET", `/threads/${id}/events?limit=200`);
+  postMessage = (threadId: string, body: string) =>
+    this.call<{ event: Event }>("POST", "/events", { thread_id: threadId, kind: "message", body });
+  decisions = () => this.call<{ decisions: Decision[] }>("GET", "/decisions?include_superseded=true");
+  createDecision = (input: { statement: string; rationale?: string; thread_id?: string }) =>
+    this.call<{ decision: Decision }>("POST", "/decisions", input);
+  constraints = () => this.call<{ constraints: Constraint[] }>("GET", "/constraints");
+  createConstraint = (input: { rule: string; rationale?: string }) =>
+    this.call("POST", "/constraints", input);
+  tasks = () => this.call<{ tasks: Task[] }>("GET", "/tasks");
+  createTask = (input: { title: string; thread_id?: string }) =>
+    this.call<{ task: Task }>("POST", "/tasks", input);
+  presence = () => this.call<{ presence: Presence[] }>("GET", "/presence");
+
+  stream(onMessage: (m: unknown) => void, onOpen: () => void, onClose: () => void) {
+    const url = `${BASE.replace(/^http/, "ws")}/v1/stream?token=${encodeURIComponent(this.token)}`;
+    const ws = new WebSocket(url);
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("close", onClose);
+    ws.addEventListener("error", onClose);
+    ws.addEventListener("message", (e) => onMessage(JSON.parse(e.data as string)));
+    return ws;
+  }
+}

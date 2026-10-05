@@ -3,8 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["packages/*"],
-  "engines": { "node": ">=22" },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -b packages/shared packages/server packages/mcp",
@@ -13,6 +17,8 @@
     "db:reset": "docker compose down -v && npm run db:up && npm run db:migrate",
     "db:migrate": "npm run migrate -w @bulletz/server",
     "dev:server": "npm run dev -w @bulletz/server",
-    "dev:mcp": "npm run dev -w @bulletz/mcp"
+    "dev:mcp": "npm run dev -w @bulletz/mcp",
+    "dev:web": "npm run dev -w @bulletz/web",
+    "dev": "npm run dev:server & npm run dev:web"
   }
 }
