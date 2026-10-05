@@ -25,6 +25,7 @@ export const api = {
   post: <T>(path: string, body: unknown) => call<T>("POST", path, body),
   patch: <T>(path: string, body: unknown) => call<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => call<T>("PUT", path, body),
+  del: <T>(path: string) => call<T>("DELETE", path),
 };
 
 export const qs = (params: Record<string, string | number | boolean | undefined>) => {

@@ -219,6 +219,23 @@ export async function apiRoutes(app: FastifyInstance) {
     return reply.code(201).send({ constraint });
   });
 
+  app.patch("/constraints/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z.object({ status: z.literal("retired") }).parse(req.body);
+    const constraint = await repo.retireConstraint(req.actor.workspace_id, id);
+    if (!constraint) return reply.code(404).send({ error: "active constraint not found" });
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: null,
+      actorId: req.actor.id,
+      kind: "constraint_retired",
+      body: constraint.rule,
+      payload: { constraint_id: constraint.id, status: body.status },
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { constraint };
+  });
+
   /* -------------------------------- tasks -------------------------------- */
 
   app.get("/tasks", async (req) => {
@@ -273,17 +290,23 @@ export async function apiRoutes(app: FastifyInstance) {
   app.patch("/tasks/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z
-      .object({ status: z.enum(["open", "in_progress", "blocked", "done", "cancelled"]) })
+      .object({
+        status: z.enum(["open", "in_progress", "blocked", "done", "cancelled"]).optional(),
+        title: z.string().min(3).max(500).optional(),
+        body: z.string().max(50_000).optional(),
+        labels: z.array(z.string()).optional(),
+      })
+      .refine((v) => Object.keys(v).length > 0, "nothing to update")
       .parse(req.body);
-    const task = await repo.updateTaskStatus(req.actor.workspace_id, id, body.status);
+    const task = await repo.updateTask(req.actor.workspace_id, id, body);
     if (!task) return reply.code(404).send({ error: "task not found" });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
       threadId: task.thread_id,
       actorId: req.actor.id,
       kind: "task_updated",
-      body: `${task.title} → ${body.status}`,
-      payload: { task_id: task.id, status: body.status },
+      body: body.status ? `${task.title} → ${body.status}` : `${task.title} (edited)`,
+      payload: { task_id: task.id, ...body },
       refs: { tasks: [task.id] },
     });
     broadcast(req.actor.workspace_id, { type: "task", task });

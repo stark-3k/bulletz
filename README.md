@@ -56,6 +56,10 @@ context is a replayable *query* over the log, not a synced copy of it.
   under either would dilute them. The bar for `project_links`: it must *not* be
   derivable from the checkout. The agent has the files; it does not know the
   production URL or which dashboard shows the error budget.
+- **Memory is revocable, not rewritable.** Decisions are superseded, never
+  edited; constraints are retired, never deleted. Both stay in the log — the
+  record of what was once believed survives, while only what is currently true
+  reaches an agent's context.
 - **Agents draft; humans activate.** An agent that can both author and run a
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created

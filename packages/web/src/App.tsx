@@ -97,6 +97,7 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
   const [presence, setPresence] = useState<Presence[]>([]);
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
   const [surface, setSurface] = useState<"chat" | "apps">(
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
   );
@@ -243,7 +244,9 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
         </div>
       </div>
 
-      <div className={surface === "apps" ? "panes panes-apps" : "panes"}>
+      <div
+        className={`${surface === "apps" ? "panes panes-apps" : "panes"}${memOpen ? "" : " mem-collapsed"}`}
+      >
         {surface === "apps" ? (
           <Apps api={api} tasks={tasks} widgets={widgets} onChange={refreshMemory} />
         ) : (
@@ -298,9 +301,23 @@ function Workspace({ api, me }: { api: Api; me: { handle: string; kind: string }
 
         )}
 
-        <div className="pane">
-          <div className="pane-head">Project memory</div>
-          <div className="pane-body">
+        <div className="pane mem-pane">
+          <div className="pane-head">
+            {memOpen && "Project memory"}
+            <button
+              className="icon-btn"
+              title={memOpen ? "Collapse" : "Expand project memory"}
+              onClick={() => {
+                setMemOpen((v) => {
+                  localStorage.setItem("bulletz.mem", v ? "0" : "1");
+                  return !v;
+                });
+              }}
+            >
+              {memOpen ? "›" : "‹"}
+            </button>
+          </div>
+          <div className="pane-body" hidden={!memOpen}>
             <ProjectCard project={project} />
             <Memory decisions={decisions} constraints={constraints} tasks={tasks} />
             <WidgetPanel widgets={widgets} api={api} onChange={refreshMemory} />
@@ -484,10 +501,7 @@ function WidgetPanel({
 }) {
   const pinned = widgets.filter((w) => w.pinned || w.status === "active");
   return (
-    <div className="mem-group">
-      <div className="mem-label">
-        Widgets <span className="mem-count">{widgets.length}</span>
-      </div>
+    <Section id="widgets" label="Widgets" count={widgets.length} defaultOpen={false}>
       {widgets.length === 0 && <div className="empty">none — agents publish these</div>}
       {pinned.map((w) => (
         <Widget key={w.id} widget={w} api={api} />
@@ -497,7 +511,7 @@ function WidgetPanel({
         .map((w) => (
           <WidgetWithGate key={w.id} widget={w} api={api} onChange={onChange} />
         ))}
-    </div>
+    </Section>
   );
 }
 
@@ -505,11 +519,50 @@ function WidgetPanel({
 /** Project identity: what this is and where it lives. First thing in the
  *  memory pane because it is the first thing a new arrival needs, and the
  *  part a checkout cannot tell them. */
+
+/** Collapsible, with the open/closed state kept per section. The memory pane
+ *  grows without bound as a project accumulates; being able to fold a section
+ *  away is what keeps it readable. */
+function Section({
+  id,
+  label,
+  count,
+  children,
+  defaultOpen = true,
+}: {
+  id: string;
+  label: string;
+  count?: number;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const key = `bulletz.sec.${id}`;
+  const [open, setOpen] = useState(() => {
+    const v = localStorage.getItem(key);
+    return v === null ? defaultOpen : v === "1";
+  });
+  const toggle = () => {
+    setOpen((v) => {
+      localStorage.setItem(key, v ? "0" : "1");
+      return !v;
+    });
+  };
+  return (
+    <div className="mem-group">
+      <button className="mem-label mem-toggle" onClick={toggle} aria-expanded={open}>
+        <span className={`chev${open ? " open" : ""}`}>›</span>
+        {label}
+        {count !== undefined && <span className="mem-count">{count}</span>}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function ProjectCard({ project }: { project: Project | null }) {
   if (!project) return null;
   return (
-    <div className="mem-group project-card">
-      <div className="mem-label">Project</div>
+    <Section id="project" label="Project">
       <div className="project-name">{project.name}</div>
       {project.summary ? (
         <div className="project-summary">{project.summary}</div>
@@ -533,7 +586,7 @@ function ProjectCard({ project }: { project: Project | null }) {
           ))}
         </div>
       )}
-    </div>
+    </Section>
   );
 }
 
@@ -549,10 +602,7 @@ function Memory({
   const open = tasks.filter((t) => t.status !== "done" && t.status !== "cancelled");
   return (
     <>
-      <div className="mem-group">
-        <div className="mem-label">
-          Constraints <span className="mem-count">{constraints.length}</span>
-        </div>
+      <Section id="constraints" label="Constraints" count={constraints.length}>
         {constraints.length === 0 && <div className="empty">none — try /constrain</div>}
         {constraints.map((c) => (
           <div className="card constraint" key={c.id}>
@@ -560,12 +610,9 @@ function Memory({
             {c.rationale && <div className="card-why">{c.rationale}</div>}
           </div>
         ))}
-      </div>
+      </Section>
 
-      <div className="mem-group">
-        <div className="mem-label">
-          Decisions <span className="mem-count">{decisions.length}</span>
-        </div>
+      <Section id="decisions" label="Decisions" count={decisions.length}>
         {decisions.length === 0 && <div className="empty">none — try /decide</div>}
         {decisions.map((d) => (
           <div
@@ -582,12 +629,9 @@ function Memory({
             </div>
           </div>
         ))}
-      </div>
+      </Section>
 
-      <div className="mem-group">
-        <div className="mem-label">
-          Open work <span className="mem-count">{open.length}</span>
-        </div>
+      <Section id="work" label="Open work" count={open.length}>
         {open.length === 0 && <div className="empty">nothing open</div>}
         {open.map((t) => (
           <div className="task" key={t.id}>
@@ -606,7 +650,7 @@ function Memory({
             </div>
           </div>
         ))}
-      </div>
+      </Section>
     </>
   );
 }

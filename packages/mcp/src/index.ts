@@ -265,15 +265,69 @@ server.tool(
 
 server.tool(
   "update_task",
-  "Change a task's status.",
+  "Change a task: its status, title, body or labels. Pass only the fields you want changed.",
   {
     task_id: z.string().uuid(),
-    status: z.enum(["open", "in_progress", "blocked", "done", "cancelled"]),
+    status: z.enum(["open", "in_progress", "blocked", "done", "cancelled"]).optional(),
+    title: z.string().min(3).max(500).optional(),
+    body: z.string().max(50_000).optional(),
+    labels: z.array(z.string()).optional(),
   },
   async (args) => {
+    const { task_id, ...patch } = args;
+    if (Object.keys(patch).length === 0) return text("Nothing to update.");
     try {
-      await api.patch(`/tasks/${args.task_id}`, { status: args.status });
-      return text(`Task ${args.task_id} → ${args.status}`);
+      await api.patch(`/tasks/${task_id}`, patch);
+      return text(`Updated task ${task_id}: ${Object.keys(patch).join(", ")}`);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "retire_constraint",
+  "Retire a project constraint that is wrong or no longer applies. Constraints appear in the 'do not violate' section of every context pack, so a stale one actively misleads. Retiring keeps it in the log but removes it from that section — it is not a delete.",
+  { constraint_id: z.string().uuid().describe("From context_pack or list_constraints") },
+  async (args) => {
+    try {
+      await api.patch(`/constraints/${args.constraint_id}`, { status: "retired" });
+      return text(`Retired constraint ${args.constraint_id}.`);
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "list_constraints",
+  "List the project's active constraints with their ids.",
+  {},
+  async () => {
+    try {
+      const r = await api.get<{ constraints: Array<{ id: string; rule: string; rationale: string | null }> }>(
+        "/constraints",
+      );
+      if (!r.constraints.length) return text("No active constraints.");
+      return text(
+        r.constraints
+          .map((c) => `${c.rule}${c.rationale ? `\n    why: ${c.rationale}` : ""}\n    id: ${c.id}`)
+          .join("\n\n"),
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "remove_project_link",
+  "Retire a project link whose URL is wrong or dead. Addressed by its label.",
+  { label: z.string().min(1).max(80) },
+  async (args) => {
+    try {
+      await api.del(`/project/links/${encodeURIComponent(args.label)}`);
+      return text(`Retired link "${args.label}".`);
     } catch (e) {
       return fail(e);
     }

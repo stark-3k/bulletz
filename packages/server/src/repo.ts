@@ -252,17 +252,34 @@ export async function listTasks(
   );
 }
 
-export async function updateTaskStatus(
+export async function updateTask(
   workspaceId: string,
   taskId: string,
-  status: string,
+  patch: { status?: string; title?: string; body?: string; labels?: string[] },
 ): Promise<Task | null> {
   return maybeOne<Task>(
-    `update tasks set status = $3, updated_at = now()
+    `update tasks set
+       status  = coalesce($3, status),
+       title   = coalesce($4, title),
+       body    = coalesce($5, body),
+       labels  = coalesce($6::text[], labels),
+       updated_at = now()
       where workspace_id = $1 and id = $2
       returning id, workspace_id, thread_id, title, body, status, labels, assignee_id,
                 created_at, updated_at`,
-    [workspaceId, taskId, status],
+    [workspaceId, taskId, patch.status ?? null, patch.title ?? null, patch.body ?? null, patch.labels ?? null],
+  );
+}
+
+/** Constraints are retired, never deleted: they sit in the "do not violate"
+ *  section of every context pack, so a wrong one has to be revocable — but the
+ *  log still records that it was once in force. */
+export async function retireConstraint(workspaceId: string, id: string) {
+  return maybeOne<{ id: string; rule: string; status: string }>(
+    `update project_constraints set status = 'retired'
+      where workspace_id = $1 and id = $2 and status = 'active'
+      returning id, rule, status`,
+    [workspaceId, id],
   );
 }
 
