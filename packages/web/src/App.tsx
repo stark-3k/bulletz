@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Thread } from "@bulletz/shared";
 import { Api, type Constraint, type Presence, type Project } from "./api.ts";
-import { TerminalPane, bridge } from "./Terminal.tsx";
+import { TerminalPane, bridge, type AgentPolicy, type AgentRunEvent } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 import { Apps } from "./Apps.tsx";
 
@@ -98,6 +98,8 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
+  const [agentRun, setAgentRun] = useState<{ threadId: string; status: string } | null>(null);
+  const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [surface, setSurface] = useState<"chat" | "apps">(
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
   );
@@ -179,6 +181,26 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     return () => ws.close();
   }, [api, refreshMemory]);
 
+  // Live status of a chat-triggered agent turn. The transcript itself arrives
+  // as ordinary events over the WebSocket, because the adapter posts it into
+  // the thread — so teammates see the work, not just the person who asked.
+  useEffect(() => {
+    const b = bridge();
+    if (!b?.agent) return;
+    void b.agent.policy().then(setPolicy);
+    return b.agent.onEvent((threadId, e: AgentRunEvent) => {
+      const status =
+        e.type === "start" ? `running · ${e.model}`
+        : e.type === "tool" ? `${e.name}…`
+        : e.type === "text" ? "writing…"
+        : e.type === "end" ? `done${e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}`
+        : e.type === "error" ? `error: ${e.message.slice(0, 90)}`
+        : "working…";
+      setAgentRun({ threadId, status });
+      if (e.type === "end" || e.type === "error") setTimeout(() => setAgentRun(null), 6000);
+    });
+  }, []);
+
   const active = threads.find((t) => t.id === activeId) ?? null;
 
   const newThread = async () => {
@@ -221,6 +243,18 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         url: link[3]!,
         ...(link[4] ? { notes: link[4].trim() } : {}),
       });
+    } else if (/^@agent\s+/.test(text)) {
+      // Post the ask first, so the record shows who asked what even if local
+      // policy refuses the run or the agent fails.
+      await api.postMessage(activeId, text);
+      const prompt = text.replace(/^@agent\s+/, "").trim();
+      const b = bridge();
+      if (!b?.agent) {
+        await api.postMessage(activeId, "_Agent runs need the desktop app._");
+      } else {
+        const r = await b.agent.run(activeId, prompt, true);
+        if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
+      }
     } else if (task?.[1]) {
       await api.createTask({ title: task[1].trim(), thread_id: activeId });
     } else {
@@ -305,7 +339,20 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
           <div className="pane-body">
             <Stream events={events} widgets={widgets} api={api} me={me} onChange={refreshMemory} />
           </div>
-          <Composer disabled={!activeId} onSubmit={submit} />
+          {agentRun?.threadId === activeId && (
+            <div className="agent-strip">
+              <span className="agent-dot" />
+              <span>agent · {agentRun.status}</span>
+              <button
+                className="icon-btn"
+                title="Stop this run"
+                onClick={() => void bridge()?.agent?.stop(activeId!)}
+              >
+                ■
+              </button>
+            </div>
+          )}
+          <Composer disabled={!activeId} onSubmit={submit} policy={policy} onPolicy={setPolicy} />
         </div>
         </>
 
@@ -807,9 +854,13 @@ function Memory({
 function Composer({
   disabled,
   onSubmit,
+  policy,
+  onPolicy,
 }: {
   disabled: boolean;
   onSubmit: (text: string) => Promise<void>;
+  policy: AgentPolicy | null;
+  onPolicy: (p: AgentPolicy) => void;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -836,7 +887,9 @@ function Composer({
           rows={1}
           value={text}
           disabled={disabled}
-          placeholder={disabled ? "Select a thread" : "Message, or /decide · /constrain · /task"}
+          placeholder={
+            disabled ? "Select a thread" : "Message, @agent to run, or /decide · /constrain · /task"
+          }
           onChange={(e) => {
             setText(e.target.value);
             e.target.style.height = "auto";
@@ -854,9 +907,26 @@ function Composer({
         </button>
       </div>
       <div className="composer-hint">
-        <code>/decide</code> stmt -- why · <code>/constrain</code> rule -- why ·{" "}
-        <code>/task</code> title · <code>/about</code> summary ·{" "}
-        <code>/link</code> kind label url
+        <code>@agent</code> prompt · <code>/decide</code> stmt -- why ·{" "}
+        <code>/constrain</code> rule -- why · <code>/task</code> title ·{" "}
+        <code>/about</code> summary · <code>/link</code> kind label url
+        {policy && (
+          <button
+            className={`policy-chip${policy.enabled ? " on" : ""}`}
+            title={
+              policy.enabled
+                ? `Chat can start agent runs on this machine · cap $${policy.maxBudgetUsd} per turn`
+                : "Chat-triggered agent runs are off on this machine"
+            }
+            onClick={() => {
+              void bridge()
+                ?.agent?.policy({ enabled: !policy.enabled })
+                .then(onPolicy);
+            }}
+          >
+            {policy.enabled ? `@agent on · $${policy.maxBudgetUsd}/turn` : "@agent off"}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -15,7 +15,31 @@ type Bridge = {
     onData: (cb: (id: string, data: string) => void) => () => void;
     onExit: (cb: (id: string, code: number) => void) => () => void;
   };
+  agent?: {
+    run: (threadId: string, prompt: string, byOwner: boolean) => Promise<{ ok: boolean; error?: string }>;
+    stop: (threadId: string) => Promise<boolean>;
+    status: (threadId: string) => Promise<{ running: boolean }>;
+    policy: (patch?: Partial<AgentPolicy>) => Promise<AgentPolicy>;
+    onEvent: (cb: (threadId: string, e: AgentRunEvent) => void) => () => void;
+  };
 };
+
+/** Owned by the machine, not the server: a teammate's message starting a shell
+ *  on this laptop is remote code execution, so the laptop keeps its own veto. */
+export type AgentPolicy = {
+  enabled: boolean;
+  triggerFrom: "owner" | "anyone";
+  maxBudgetUsd: number;
+  restrictOthers: boolean;
+};
+
+export type AgentRunEvent =
+  | { type: "start"; sessionId: string; model: string }
+  | { type: "text"; text: string }
+  | { type: "tool"; name: string; input: unknown }
+  | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "end"; subtype: string; costUsd: number | null; turns: number | null }
+  | { type: "error"; message: string };
 
 export const bridge = (): Bridge | null =>
   (globalThis as unknown as { bulletz?: Bridge }).bulletz ?? null;

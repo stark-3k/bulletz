@@ -5,6 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync } from "node:fs";
+import { ClaudeCodeAdapter, DEFAULT_POLICY, type AgentEvent, type Policy } from "./agent.js";
 
 const exec = promisify(execFile);
 
@@ -27,6 +29,54 @@ function projectEnv(): Record<string, string> {
 }
 
 const terminals = new Map<string, IPty>();
+
+/* ----------------------------- agent policy ----------------------------- */
+// Lives on disk, owned by this machine. A teammate's chat message starting a
+// shell here is remote code execution, so the laptop keeps its own veto rather
+// than trusting a server-side permission.
+const policyPath = join(app.getPath("userData"), "agent-policy.json");
+
+function loadPolicy(): Policy {
+  try {
+    return { ...DEFAULT_POLICY, ...(JSON.parse(readFileSyncRaw(policyPath, "utf8")) as Partial<Policy>) };
+  } catch {
+    return { ...DEFAULT_POLICY };
+  }
+}
+
+function savePolicy(p: Policy) {
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(policyPath, JSON.stringify(p, null, 2));
+}
+
+/** Posts an agent's turn into the shared thread, so the work is visible to the
+ *  whole team instead of dying in one person's scrollback. */
+async function postToThread(
+  threadId: string,
+  kind: string,
+  body: string | null,
+  payload: Record<string, unknown> = {},
+) {
+  const env = projectEnv();
+  const base = env["BULLETZ_SERVER_URL"] ?? "http://localhost:4000";
+  // The agent posts under its OWN identity. Falling back to the human's token
+  // would make the agent's work read as if a person wrote it, which is exactly
+  // what the actor model exists to prevent — so there is no fallback.
+  const token = env["BULLETZ_AGENT_TOKEN"];
+  if (!token) {
+    console.warn("BULLETZ_AGENT_TOKEN is not set; agent output will not be posted to the thread");
+    return;
+  }
+  try {
+    await fetch(`${base}/v1/events`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ thread_id: threadId, kind, body, payload }),
+    });
+  } catch {
+    /* the UI still sees the live stream over IPC */
+  }
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -114,6 +164,60 @@ app.whenReady().then(() => {
     terminals.get(id)?.kill();
     terminals.delete(id);
   });
+
+  /* -------------------------- agent adapter --------------------------- */
+
+  const adapter = new ClaudeCodeAdapter({
+    cwd: PROJECT_ROOT,
+    env: projectEnv(),
+    mcpConfig: join(PROJECT_ROOT, ".mcp.json"),
+    onEvent: (threadId, e: AgentEvent) => {
+      if (!win.isDestroyed()) win.webContents.send("agent:event", { threadId, event: e });
+      // Mirror the turn into the shared log. Text becomes a message from the
+      // agent's own identity; tool calls become tool_call events.
+      if (e.type === "text") void postToThread(threadId, "message", e.text);
+      else if (e.type === "tool") void postToThread(threadId, "tool_call", e.name, { input: e.input });
+      else if (e.type === "start")
+        void postToThread(threadId, "agent_turn_start", null, { model: e.model, session: e.sessionId });
+      else if (e.type === "end")
+        void postToThread(threadId, "agent_turn_end", null, { subtype: e.subtype, cost_usd: e.costUsd, turns: e.turns });
+      else if (e.type === "error") void postToThread(threadId, "agent_error", e.message);
+    },
+  });
+
+  ipcMain.handle("agent:policy", (_e, patch?: Partial<Policy>) => {
+    const current = loadPolicy();
+    if (!patch) return current;
+    const next = { ...current, ...patch };
+    savePolicy(next);
+    return next;
+  });
+
+  ipcMain.handle(
+    "agent:run",
+    async (_e, { threadId, prompt, byOwner }: { threadId: string; prompt: string; byOwner: boolean }) => {
+      const policy = loadPolicy();
+      if (!policy.enabled) {
+        return { ok: false, error: "Chat-triggered agent runs are disabled on this machine." };
+      }
+      if (policy.triggerFrom === "owner" && !byOwner) {
+        return { ok: false, error: "Only this machine's owner may start a turn here." };
+      }
+      if (adapter.isRunning(threadId)) {
+        return { ok: false, error: "A turn is already running in this thread." };
+      }
+      const trusted = byOwner || !policy.restrictOthers;
+      void adapter.run(threadId, prompt, policy, trusted);
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle("agent:stop", (_e, { threadId }: { threadId: string }) => adapter.stop(threadId));
+  ipcMain.handle("agent:status", (_e, { threadId }: { threadId: string }) => ({
+    running: adapter.isRunning(threadId),
+  }));
+
+  win.on("closed", () => adapter.stopAll());
 
   /* ---------------------- local state, allowlisted ---------------------- */
   // Only these fields ever leave the machine. Never file contents.

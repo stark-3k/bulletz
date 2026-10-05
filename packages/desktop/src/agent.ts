@@ -1,0 +1,222 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+
+/**
+ * Claude Code adapter.
+ *
+ * MCP is pull-only: it lets an agent read and write the workspace, but nothing
+ * wakes it. This is the other half — a chat message starts a turn, and the
+ * transcript streams back into the thread so the work is visible to everyone
+ * rather than dying in someone's scrollback.
+ *
+ * Everything vendor-specific lives in this file. The rest of the app speaks
+ * AgentEvent, so a second adapter (Aider, Cursor, …) is a sibling of this file
+ * and touches nothing else.
+ */
+
+export type AgentEvent =
+  | { type: "start"; sessionId: string; model: string }
+  | { type: "text"; text: string }
+  | { type: "tool"; name: string; input: unknown }
+  | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "end"; subtype: string; costUsd: number | null; turns: number | null }
+  | { type: "error"; message: string };
+
+export type Policy = {
+  /** Chat-triggered runs are off until the machine's owner turns them on:
+   *  a teammate's message starting a shell here is remote code execution. */
+  enabled: boolean;
+  /** "owner" — only messages from this machine's own actor may start a turn. */
+  triggerFrom: "owner" | "anyone";
+  /** Hard ceiling per turn. Note the CLI checks this AFTER a turn completes,
+   *  so treat it as a stop condition, not a pre-flight cap. */
+  maxBudgetUsd: number;
+  /** Runs triggered by anyone other than the owner drop the code-running tools. */
+  restrictOthers: boolean;
+  /** Explicit grant list. `--permission-prompts none` denies anything that
+   *  would otherwise prompt — there is nobody at a headless run to approve —
+   *  so a tool not named here simply cannot run. Note this is also the right
+   *  security shape: the agent gets the workspace and read-only code access,
+   *  and must be granted anything beyond that deliberately. */
+  allowedTools: string[];
+};
+
+/** Workspace memory plus read-only code access. Deliberately excludes Bash,
+ *  Write and Edit: a chat message should not mutate the checkout until the
+ *  machine's owner widens this. */
+export const DEFAULT_ALLOWED_TOOLS = [
+  "mcp__bulletz",
+  "Read",
+  "Glob",
+  "Grep",
+];
+
+export const DEFAULT_POLICY: Policy = {
+  enabled: false,
+  triggerFrom: "owner",
+  maxBudgetUsd: 2,
+  restrictOthers: true,
+  allowedTools: DEFAULT_ALLOWED_TOOLS,
+};
+
+type Run = { proc: ChildProcessWithoutNullStreams; claudeSessionId: string | null };
+
+export class ClaudeCodeAdapter {
+  readonly id = "claude-code";
+  /** thread id -> claude session id, so a thread is one continuous conversation */
+  private sessions = new Map<string, string>();
+  private running = new Map<string, Run>();
+
+  constructor(
+    private opts: {
+      cwd: string;
+      env: Record<string, string>;
+      mcpConfig: string;
+      onEvent: (threadId: string, e: AgentEvent) => void;
+    },
+  ) {}
+
+  isRunning = (threadId: string) => this.running.has(threadId);
+
+  stop(threadId: string) {
+    const run = this.running.get(threadId);
+    if (!run) return false;
+    run.proc.kill("SIGTERM");
+    this.running.delete(threadId);
+    return true;
+  }
+
+  stopAll() {
+    for (const id of [...this.running.keys()]) this.stop(id);
+  }
+
+  async run(threadId: string, prompt: string, policy: Policy, trusted: boolean): Promise<void> {
+    if (this.running.has(threadId)) {
+      this.opts.onEvent(threadId, { type: "error", message: "a turn is already running in this thread" });
+      return;
+    }
+
+    const prior = this.sessions.get(threadId);
+    const sessionId = prior ?? randomUUID();
+
+    const args = [
+      "-p",
+      "--output-format", "stream-json",
+      "--verbose",
+      "--mcp-config", this.opts.mcpConfig,
+      "--strict-mcp-config",
+      "--max-budget-usd", String(policy.maxBudgetUsd),
+      "--permission-prompts", "none",
+      "--allowed-tools", ...(policy.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
+      ...(prior ? ["--resume", prior] : ["--session-id", sessionId]),
+      // An untrusted trigger gets no shell and no code execution.
+      ...(trusted ? [] : ["--restricted"]),
+      "--append-system-prompt",
+      "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work. " +
+        "Your reply is posted into a shared team thread, so write for teammates who did not see the task.",
+      prompt,
+    ];
+
+    const proc = spawn("claude", args, {
+      cwd: this.opts.cwd,
+      env: { ...process.env, ...this.opts.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+
+    this.running.set(threadId, { proc, claudeSessionId: null });
+
+    let stderr = "";
+    proc.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+
+    createInterface({ input: proc.stdout }).on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let m: Record<string, unknown>;
+      try {
+        m = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        return; // non-JSON noise on stdout is not fatal
+      }
+      this.handle(threadId, sessionId, m);
+    });
+
+    await new Promise<void>((resolve) => {
+      proc.on("close", (code) => {
+        this.running.delete(threadId);
+        if (code !== 0 && code !== null) {
+          this.opts.onEvent(threadId, {
+            type: "error",
+            message: `claude exited ${code}${stderr ? `: ${stderr.slice(0, 400)}` : ""}`,
+          });
+        }
+        resolve();
+      });
+      proc.on("error", (err) => {
+        this.running.delete(threadId);
+        this.opts.onEvent(threadId, { type: "error", message: err.message });
+        resolve();
+      });
+    });
+  }
+
+  private handle(threadId: string, fallbackSession: string, m: Record<string, unknown>) {
+    const type = m["type"] as string | undefined;
+
+    if (type === "system" && m["subtype"] === "init") {
+      const sid = (m["session_id"] as string) ?? fallbackSession;
+      this.sessions.set(threadId, sid);
+      this.opts.onEvent(threadId, {
+        type: "start",
+        sessionId: sid,
+        model: (m["model"] as string) ?? "unknown",
+      });
+      return;
+    }
+
+    if (type === "assistant") {
+      const content = ((m["message"] as Record<string, unknown>)?.["content"] ?? []) as Array<
+        Record<string, unknown>
+      >;
+      for (const c of content) {
+        if (c["type"] === "text" && typeof c["text"] === "string" && c["text"].trim()) {
+          this.opts.onEvent(threadId, { type: "text", text: c["text"] });
+        } else if (c["type"] === "tool_use") {
+          this.opts.onEvent(threadId, {
+            type: "tool",
+            name: (c["name"] as string) ?? "tool",
+            input: c["input"],
+          });
+        }
+      }
+      return;
+    }
+
+    if (type === "user") {
+      const content = ((m["message"] as Record<string, unknown>)?.["content"] ?? []) as Array<
+        Record<string, unknown>
+      >;
+      for (const c of content) {
+        if (c["type"] === "tool_result") {
+          this.opts.onEvent(threadId, {
+            type: "tool_result",
+            name: "tool",
+            ok: c["is_error"] !== true,
+          });
+        }
+      }
+      return;
+    }
+
+    if (type === "result") {
+      this.opts.onEvent(threadId, {
+        type: "end",
+        subtype: (m["subtype"] as string) ?? "success",
+        costUsd: (m["total_cost_usd"] as number) ?? null,
+        turns: (m["num_turns"] as number) ?? null,
+      });
+    }
+  }
+}

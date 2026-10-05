@@ -600,3 +600,26 @@ button { font: inherit; cursor: pointer; }
 }
 .msg-actions button.danger.solid:hover { background: #ff8080; border-color: #ff8080; color: #1a0d0d; }
 .msg-actions button:disabled { opacity: 0.6; cursor: default; }
+
+/* ------------------------------ agent runs ------------------------------ */
+
+.agent-strip {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 5px 14px; border-top: 1px solid var(--line-soft);
+  background: #141b29; font-family: var(--mono); font-size: 10.5px; color: var(--agent);
+}
+.agent-strip .icon-btn { margin-left: auto; font-size: 9px; }
+.agent-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--agent);
+  box-shadow: 0 0 8px var(--agent); animation: agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes agent-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+.policy-chip {
+  margin-left: auto; background: none; border: 1px solid var(--line);
+  border-radius: 4px; color: var(--fg-faint);
+  font-family: var(--mono); font-size: 9.5px; padding: 1px 6px;
+}
+.policy-chip:hover { color: var(--fg-dim); border-color: var(--fg-faint); }
+.policy-chip.on { color: var(--agent); border-color: #3d3058; }
+.composer-hint { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }

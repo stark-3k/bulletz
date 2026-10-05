@@ -71,6 +71,15 @@ context is a replayable *query* over the log, not a synced copy of it.
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created
   `draft`; activation is refused for any non-human actor (403).
+- **MCP is pull; the adapter is push.** MCP lets an agent read and write the
+  workspace, but nothing wakes it — so `@agent <prompt>` in a thread starts a
+  headless Claude Code turn whose transcript is posted back into that thread.
+  The agent posts under its *own* identity, never the human's.
+- **The laptop keeps its own veto.** A teammate's message starting a shell on
+  your machine is remote code execution, so the policy lives on disk in the
+  desktop app, defaults to OFF, defaults to owner-only, carries a per-turn
+  dollar cap, and grants an explicit tool allowlist (workspace memory plus
+  read-only code access — no Bash, Write or Edit until you widen it).
 - **The terminal is workbench-level, never inside a surface.** Unmounting it
   kills its pty, which takes any running job with it, so it lives outside the
   Chat/Apps switch and spans the window like VS Code's panel.
@@ -95,6 +104,7 @@ context is a replayable *query* over the log, not a synced copy of it.
 | Retrieval: ranked union search + context packs | ✅ working |
 | MCP bridge — 12 tools, any MCP client | ✅ working |
 | Desktop app (Electron: chat + real pty terminal) | ✅ working |
+| Agent adapter — a chat message starts a Claude Code turn | ✅ working |
 | Server-side tool registry + embedded live views | ✅ working |
 | Apps surface (task board, registry, full-size widgets) | ✅ working |
 | Rollups + extraction + pgvector hybrid | ⬜ designed |
