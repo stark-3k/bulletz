@@ -1,17 +1,34 @@
 :root {
-  --bg: #0d1017;
-  --bg-raised: #131722;
-  --bg-input: #1a1f2e;
-  --line: #222838;
-  --line-soft: #1b2030;
-  --fg: #e4e8f1;
-  --fg-dim: #8d97ab;
-  --fg-faint: #5b6478;
-  --accent: #5b9cff;
+  /* Surfaces are the logo's own greys: pure neutral, near-black. The previous
+     palette was blue-tinted, which made a monochrome mark look out of place. */
+  --bg: #0b0b0c;
+  --bg-raised: #131315;
+  --bg-input: #1a1a1d;
+  --line: #27272b;
+  --line-soft: #1d1d21;
+  --fg: #ededf0;
+  --fg-dim: #9a9aa2;
+  --fg-faint: #636369;
+
+  /* The brand supplies no colour, so the chrome has none either: "active" and
+     "primary" are simply brighter. Colour is reserved for meaning — which is
+     what makes an agent message or a failing check actually stand out. */
+  --accent: #e8e8ec;
+  --accent-ink: #0b0b0c;
+  --accent-line: #3a3a40;
+
+  /* Meaning. Status steps are the reserved status palette, unchanged across
+     themes; agent purple marks a non-human author. */
   --agent: #b78cff;
-  --decision: #4fd1a5;
-  --constraint: #ffb454;
-  --danger: #ff6b6b;
+  --decision: #0ca30c;
+  --constraint: #fab219;
+  --danger: #d03b3b;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --series-1: #3987e5;
+
   --radius: 7px;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   color-scheme: dark;
@@ -36,7 +53,9 @@ button { font: inherit; cursor: pointer; }
 
 .titlebar {
   display: flex; align-items: center; gap: 12px;
-  padding: 0 14px;
+  /* hiddenInset draws the traffic lights OVER the top-left of the web content,
+     so the first 78px belong to macOS, not to us. */
+  padding: 0 14px 0 78px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-raised);
   -webkit-app-region: drag;
@@ -45,10 +64,14 @@ button { font: inherit; cursor: pointer; }
   font-weight: 650; letter-spacing: -0.2px; font-size: 13px;
   display: flex; align-items: center; gap: 7px;
 }
-.logo-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent); box-shadow: 0 0 9px var(--accent);
+/* The mark is pure black, so on a dark surface it must be inverted. Inverting
+   rather than shipping a second file keeps the two in sync. */
+.logo-mark {
+  height: 16px; width: auto; display: block;
+  filter: invert(1); opacity: 0.9;
 }
+.auth-card .logo-mark { height: 30px; opacity: 1; }
+.logo { gap: 0; }
 .titlebar .sep { flex: 1; }
 .conn {
   display: flex; align-items: center; gap: 6px;
@@ -117,9 +140,9 @@ button { font: inherit; cursor: pointer; }
   width: 24px; height: 24px; border-radius: 6px; flex: none;
   display: grid; place-items: center;
   font-size: 10.5px; font-weight: 650; font-family: var(--mono);
-  background: #243044; color: var(--accent);
+  background: #24242a; color: var(--accent);
 }
-.avatar.agent { background: #2d2342; color: var(--agent); }
+.avatar.agent { background: #221c2e; color: var(--agent); }
 .msg-main { min-width: 0; flex: 1; }
 .msg-head { display: flex; align-items: baseline; gap: 8px; }
 .msg-who { font-weight: 600; font-size: 12.5px; }
@@ -127,7 +150,7 @@ button { font: inherit; cursor: pointer; }
 .badge {
   font-size: 9.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
   padding: 1px 5px; border-radius: 4px; font-family: var(--mono);
-  background: #2d2342; color: var(--agent); border: 1px solid #3d3058;
+  background: #221c2e; color: var(--agent); border: 1px solid #332a45;
 }
 .msg-time { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); }
 .msg-body { white-space: pre-wrap; overflow-wrap: break-word; font-size: 13px; }
@@ -172,14 +195,14 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-input); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 8px 10px;
 }
-.composer-box:focus-within { border-color: #2f3b52; }
+.composer-box:focus-within { border-color: var(--accent-line); }
 .composer textarea {
   flex: 1; background: none; border: 0; resize: none; color: var(--fg);
   font: inherit; outline: none; max-height: 140px; min-height: 19px;
 }
 .composer textarea::placeholder { color: var(--fg-faint); }
 .send {
-  background: var(--accent); color: #07101f; border: 0;
+  background: var(--accent); color: var(--accent-ink); border: 0;
   border-radius: 5px; padding: 4px 11px; font-weight: 600; font-size: 12px;
 }
 .send:disabled { background: var(--line); color: var(--fg-faint); cursor: default; }
@@ -223,7 +246,7 @@ button { font: inherit; cursor: pointer; }
 .tag {
   font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.04em;
   padding: 0 4px; border-radius: 3px; text-transform: uppercase;
-  background: #2a1f24; color: var(--danger); border: 1px solid #44292f;
+  background: #241a1b; color: var(--danger); border: 1px solid #3d2628;
 }
 
 .task { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; }
@@ -233,9 +256,9 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-input); border: 1px solid var(--line); color: var(--fg-dim);
   margin-top: 1px;
 }
-.task-status.in_progress { color: var(--accent); border-color: #2b3c58; }
-.task-status.blocked { color: var(--danger); border-color: #44292f; }
-.task-status.done { color: var(--decision); border-color: #214436; }
+.task-status.in_progress { color: var(--accent); border-color: var(--accent-line); }
+.task-status.blocked { color: var(--danger); border-color: #3d2628; }
+.task-status.done { color: var(--status-good); border-color: #1b3a1b; }
 .task-title { font-size: 12px; min-width: 0; }
 .task-labels { display: flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
 .label {
@@ -265,15 +288,15 @@ button { font: inherit; cursor: pointer; }
   border-radius: 6px; padding: 8px 10px; color: var(--fg);
   font-family: var(--mono); font-size: 12px; outline: none; margin-bottom: 12px;
 }
-.auth-card input:focus { border-color: #2f3b52; }
+.auth-card input:focus { border-color: var(--accent-line); }
 .auth-card .send { width: 100%; padding: 8px; }
 .auth-err { color: var(--danger); font-size: 11.5px; margin-bottom: 10px; font-family: var(--mono); }
 .auth-note { color: var(--fg-faint); font-size: 10.5px; margin-top: 13px; font-family: var(--mono); }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #232a3b; border-radius: 5px; border: 2px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: #2e374c; }
+::-webkit-scrollbar-thumb { background: #2a2a2f; border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #3a3a41; }
 
 /* ------------------------------- terminal ------------------------------ */
 
@@ -320,15 +343,6 @@ button { font: inherit; cursor: pointer; }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
 /* -------------------------------- widgets ------------------------------- */
-/* Chart series use the validated dark-mode categorical steps; status colours
-   are the reserved status palette and always ship with a glyph + label. */
-:root {
-  --series-1: #3987e5;
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
-}
 
 .widget {
   border: 1px solid var(--line); border-radius: var(--radius);
@@ -490,7 +504,7 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-input); border: 1px solid var(--line); border-radius: 5px;
   color: var(--fg-dim); padding: 3px 9px; font-size: 11.5px; text-decoration: none;
 }
-.embed-pill:hover { color: var(--fg); border-color: #2f3b52; }
+.embed-pill:hover { color: var(--fg); border-color: var(--accent-line); }
 .embed-pill.active { color: var(--fg); border-color: var(--accent); }
 
 .embed-bar {
@@ -517,7 +531,7 @@ button { font: inherit; cursor: pointer; }
   flex: 1; background: var(--bg-input); border: 1px solid var(--line); border-radius: 6px;
   padding: 6px 10px; color: var(--fg); font: inherit; outline: none;
 }
-.board-add input:focus { border-color: #2f3b52; }
+.board-add input:focus { border-color: var(--accent-line); }
 
 .board-cols {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -528,7 +542,7 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--bg-raised);
 }
-.board-col.over { border-color: var(--accent); background: #141b29; }
+.board-col.over { border-color: var(--accent); background: var(--bg-input); }
 .board-col-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 10px; border-bottom: 1px solid var(--line-soft);
@@ -560,7 +574,7 @@ button { font: inherit; cursor: pointer; }
   text-transform: uppercase; padding: 1px 5px; border-radius: 3px;
   background: var(--bg-input); border: 1px solid var(--line); color: var(--fg-dim);
 }
-.registry-kind.html { color: var(--agent); border-color: #3d3058; }
+.registry-kind.html { color: var(--agent); border-color: #332a45; }
 .registry-meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-top: 3px; }
 .registry-ok { font-family: var(--mono); font-size: 10px; color: var(--decision); }
 
@@ -633,7 +647,7 @@ button { font: inherit; cursor: pointer; }
 .agent-strip {
   display: flex; align-items: center; gap: 8px; flex: none;
   padding: 5px 14px; border-top: 1px solid var(--line-soft);
-  background: #141b29; font-family: var(--mono); font-size: 10.5px; color: var(--agent);
+  background: var(--bg-input); font-family: var(--mono); font-size: 10.5px; color: var(--agent);
 }
 .agent-strip .icon-btn { margin-left: auto; font-size: 9px; }
 .agent-dot {
@@ -648,7 +662,7 @@ button { font: inherit; cursor: pointer; }
   font-family: var(--mono); font-size: 9.5px; padding: 1px 6px;
 }
 .policy-chip:hover { color: var(--fg-dim); border-color: var(--fg-faint); }
-.policy-chip.on { color: var(--agent); border-color: #3d3058; }
+.policy-chip.on { color: var(--agent); border-color: #332a45; }
 .composer-hint { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 
 /* Turn markers: a rule, not a message. */
@@ -694,7 +708,7 @@ button { font: inherit; cursor: pointer; }
 }
 .channel-confirm button:not(.danger):hover { color: var(--fg); border-color: var(--fg-faint); }
 
-.icon-btn.on { color: var(--accent); border-color: #2b3c58; }
+.icon-btn.on { color: var(--accent); border-color: var(--accent-line); }
 
 /* ---------------------------- reply threads ---------------------------- */
 
@@ -872,7 +886,7 @@ button { font: inherit; cursor: pointer; }
 .voice-bar {
   display: flex; align-items: center; gap: 8px; flex: none; flex-wrap: wrap;
   padding: 6px 14px; border-bottom: 1px solid var(--line-soft);
-  background: #121a26;
+  background: var(--bg-input);
 }
 .voice-bar.idle { background: none; }
 .voice-join {
@@ -894,10 +908,10 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-radius: 5px;
   background: var(--bg-input); padding: 1px 7px 1px 2px;
 }
-.voice-tile.speaking { border-color: var(--decision); }
+.voice-tile.speaking { border-color: var(--status-good); }
 .voice-avatar {
   width: 17px; height: 17px; border-radius: 4px; display: grid; place-items: center;
-  background: #243044; color: var(--accent);
+  background: #24242a; color: var(--accent);
   font-family: var(--mono); font-size: 8.5px; font-weight: 700;
 }
 .voice-name { font-size: 11px; color: var(--fg-dim); }
@@ -908,7 +922,7 @@ button { font: inherit; cursor: pointer; }
   color: var(--fg-dim); font-size: 10.5px; padding: 2px 8px;
 }
 .voice-ctl:hover { color: var(--fg); border-color: var(--fg-faint); }
-.voice-ctl.on { color: var(--accent); border-color: #2b3c58; }
+.voice-ctl.on { color: var(--accent); border-color: var(--accent-line); }
 .voice-ctl.leave { margin-left: auto; }
 .voice-ctl.leave:hover { color: var(--danger); border-color: var(--danger); }
 .voice-error { font-family: var(--mono); font-size: 10px; color: var(--danger); }
@@ -918,11 +932,11 @@ button { font: inherit; cursor: pointer; }
 .voice-screen-label {
   position: absolute; left: 10px; bottom: 8px;
   font-family: var(--mono); font-size: 10px; color: var(--fg-dim);
-  background: rgba(13, 16, 23, 0.8); border-radius: 4px; padding: 2px 7px;
+  background: rgba(11, 11, 12, 0.82); border-radius: 4px; padding: 2px 7px;
 }
 
 .share-picker {
-  position: fixed; inset: 0; background: rgba(5, 7, 11, 0.7);
+  position: fixed; inset: 0; background: rgba(5, 5, 6, 0.74);
   display: grid; place-items: center; z-index: 50;
 }
 .share-picker-box {
@@ -970,7 +984,7 @@ button { font: inherit; cursor: pointer; }
 .ask-box {
   margin-top: 7px; padding: 8px 9px;
   border: 1px solid #3d3058; border-left: 2px solid var(--agent);
-  border-radius: var(--radius); background: #151120;
+  border-radius: var(--radius); background: #16131d;
 }
 .ask-quote {
   font-size: 11px; color: var(--fg-faint); margin-bottom: 7px;
@@ -986,7 +1000,7 @@ button { font: inherit; cursor: pointer; }
   border-radius: 5px; color: var(--fg-faint); font-size: 11px; padding: 4px 6px;
 }
 .auth-tab:hover { color: var(--fg-dim); }
-.auth-tab.active { color: var(--fg); background: var(--bg-input); border-color: #2f3b52; }
+.auth-tab.active { color: var(--fg); background: var(--bg-input); border-color: var(--accent-line); }
 
 /* ------------------------------- members -------------------------------- */
 
@@ -1013,7 +1027,7 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-input); border: 1px solid var(--line); border-radius: 3px;
   padding: 1px 5px; color: var(--fg-faint); flex: none; width: 62px; text-align: center;
 }
-.member-kind.agent { color: var(--agent); border-color: #3d3058; }
+.member-kind.agent { color: var(--agent); border-color: #332a45; }
 .member-handle { font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
 .member-you {
   font-family: var(--mono); font-size: 9px; color: var(--accent);
@@ -1064,7 +1078,7 @@ button { font: inherit; cursor: pointer; }
 }
 .onboard-controls textarea { flex: 1; min-width: 260px; resize: vertical; }
 .onboard-controls input { flex: 1; min-width: 120px; }
-.onboard-controls textarea:focus, .onboard-controls input:focus { border-color: #2f3b52; }
+.onboard-controls textarea:focus, .onboard-controls input:focus { border-color: var(--accent-line); }
 .onboard-note { font-size: 11.5px; color: var(--fg-dim); }
 .onboard-note code, .onboard-config code {
   font-family: var(--mono); font-size: 11px; background: var(--bg-input);

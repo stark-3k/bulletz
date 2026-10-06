@@ -130,6 +130,13 @@ context is a replayable *query* over the log, not a synced copy of it.
 - **Widget refresh never touches a model.** A 30s tick re-invokes the tool
   server-side and pushes rows. If refresh cost an inference the feature would be
   unusable at any scale.
+- **Colour means something; chrome does not.** The brand mark is strictly
+  monochrome — 197 greys, no chromatic fill anywhere — so the interface follows
+  it: surfaces are the logo's own neutral near-blacks, and "active" or
+  "primary" is simply brighter rather than blue. Colour is reserved for
+  meaning: purple marks a non-human author, and the status steps
+  (good/warning/serious/critical) keep their fixed values. A UI that spends
+  colour on decoration has none left for signal.
 - **Onboarding is a checklist derived from state, not a wizard with flags.**
   A step is done when the thing it asks for exists — a project summary, a link,
   a decision, an agent token, a second member. It therefore cannot claim you

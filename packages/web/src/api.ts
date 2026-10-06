@@ -119,7 +119,22 @@ export class Api {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      // The server already says what went wrong in `error`; showing the raw
+      // JSON envelope instead makes a clear message look like a crash.
+      const raw = await res.text();
+      let message = raw.slice(0, 200);
+      try {
+        const body = JSON.parse(raw) as { error?: string; issues?: { path: string; message: string }[] };
+        message =
+          body.error ??
+          body.issues?.map((i) => `${i.path}: ${i.message}`).join(", ") ??
+          message;
+      } catch {
+        /* not json — show what came back */
+      }
+      throw new Error(message);
+    }
     const text = await res.text();
     return text ? (JSON.parse(text) as T) : ({} as T);
   }

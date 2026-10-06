@@ -133,7 +133,7 @@ function Setup({ onDone }: { onDone: (token: string) => void }) {
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <h1>
-          <span className="logo-dot" /> bulletz
+          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
         </h1>
         <p>Nobody has set up this server yet. You will be its owner.</p>
         {err && <div className="auth-err">{err}</div>}
@@ -192,7 +192,7 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <h1>
-          <span className="logo-dot" /> bulletz
+          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
         </h1>
         <p>The context layer for local coding agents.</p>
 
@@ -520,9 +520,8 @@ function Workspace({
   return (
     <div className="app">
       <div className="titlebar">
-        <div className="logo">
-          <span className="logo-dot" />
-          bulletz
+        <div className="logo" title="bulletz.ai">
+          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
         </div>
         <div className="nav">
           {(["chat", "apps"] as const).map((s) => (
