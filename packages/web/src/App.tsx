@@ -520,8 +520,12 @@ function Workspace({
   return (
     <div className="app">
       <div className="titlebar">
+        {/* The mark alone in the chrome: a 57px-wide wordmark is unreadable at
+            this height, and the name worth showing here is the workspace, not
+            the product. The full wordmark lives on the sign-in screen. */}
         <div className="logo" title="bulletz.ai">
-          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
+          <img className="logo-mark" src="/mark.svg" alt="bulletz.ai" />
+          <span className="logo-workspace">{project?.name ?? "bulletz"}</span>
         </div>
         <div className="nav">
           {(["chat", "apps"] as const).map((s) => (

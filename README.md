@@ -136,6 +136,11 @@ context is a replayable *query* over the log, not a synced copy of it.
   viewport on a short window. Every grid column is `minmax(0, 1fr)` rather than
   `1fr`, because the default refuses to shrink below its content and one wide
   message is enough to push the right-hand panes off the screen.
+- **The mark in the chrome, the wordmark at the door.** A 57px-wide wordmark
+  is unreadable in a 38px title bar, so the chrome carries the chevron alone at
+  20px — the size where the three dots stop merging — beside the *workspace*
+  name, which is the thing a person actually needs to know there. The full
+  wordmark appears on the sign-in screen, where it has room to read.
 - **Colour means something; chrome does not.** The brand mark is strictly
   monochrome — 197 greys, no chromatic fill anywhere — so the interface follows
   it: surfaces are the logo's own neutral near-blacks, and "active" or

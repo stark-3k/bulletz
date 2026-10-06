@@ -76,18 +76,27 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-raised);
   -webkit-app-region: drag;
 }
-.logo {
-  font-weight: 650; letter-spacing: -0.2px; font-size: 13px;
-  display: flex; align-items: center; gap: 7px;
-}
+
 /* The mark is pure black, so on a dark surface it must be inverted. Inverting
    rather than shipping a second file keeps the two in sync. */
+.logo { display: flex; align-items: center; gap: 8px; flex: none; }
 .logo-mark {
-  height: 16px; width: auto; display: block;
-  filter: invert(1); opacity: 0.9;
+  /* 20px is where the three dots stop merging into the chevron. Below ~18px
+     the mark reads as a smudge; above ~22px it crowds a 38px bar. */
+  height: 20px; width: auto; display: block;
+  /* The artwork is pure black; inverting keeps one file serving both themes. */
+  filter: invert(1);
 }
-.auth-card .logo-mark { height: 30px; opacity: 1; }
-.logo { gap: 0; }
+.logo-workspace {
+  font-size: 12.5px; font-weight: 600; letter-spacing: -0.1px; color: var(--fg);
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Sign-in gets the full wordmark, where there is room for it to read. */
+.auth-card .logo-mark { height: 30px; }
+
+@media (max-width: 920px) {
+  .logo-workspace { display: none; }
+}
 .titlebar .sep { flex: 1; }
 .conn {
   display: flex; align-items: center; gap: 6px;
