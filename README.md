@@ -102,6 +102,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   tool is a privilege-escalation path — untrusted text in a PR body becomes
   "create a tool that exfiltrates, then call it". Tools and widgets are created
   `draft`; activation is refused for any non-human actor (403).
+- **Hand the agent one message, not the room.** Any message carries an "Ask
+  agent" action: the quoted text and an instruction become the prompt, and the
+  message and channel ids go with them so the agent can pull the surrounding
+  conversation itself rather than being handed context it may not need. It
+  answers in that message's own thread, which keeps a focused exchange out of
+  the channel.
 - **MCP is pull; the adapter is push.** MCP lets an agent read and write the
   workspace, but nothing wakes it — so `@agent <prompt>` in a thread starts a
   headless Claude Code turn whose transcript is posted back into that thread.

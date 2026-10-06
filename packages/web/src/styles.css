@@ -961,3 +961,21 @@ button { font: inherit; cursor: pointer; }
   padding: 10px; margin: 0 0 14px; max-height: 180px; overflow: auto; white-space: pre-wrap;
 }
 .crash-actions { display: flex; gap: 8px; }
+
+/* ----------------------------- ask the agent ---------------------------- */
+
+.msg-actions button.ask { color: var(--agent); }
+.msg-actions button.ask:hover { border-color: var(--agent); }
+
+.ask-box {
+  margin-top: 7px; padding: 8px 9px;
+  border: 1px solid #3d3058; border-left: 2px solid var(--agent);
+  border-radius: var(--radius); background: #151120;
+}
+.ask-quote {
+  font-size: 11px; color: var(--fg-faint); margin-bottom: 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-left: 2px solid var(--line); padding-left: 7px;
+}
+.ask-box .composer-box { background: var(--bg-input); }
+.ask-hint { margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }

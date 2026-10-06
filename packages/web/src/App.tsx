@@ -248,6 +248,40 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     };
   }, []);
 
+  /** Hand one message to the agent, with an instruction.
+   *
+   *  The quoted text goes in the prompt so the agent has it immediately, and
+   *  the ids go with it so it can pull the surrounding conversation itself
+   *  rather than being handed a wall of context it may not need. */
+  const askAgent = useCallback(
+    async (ev: Event, instruction: string) => {
+      if (!activeId) return;
+      const b = bridge();
+      if (!b?.agent) {
+        await api.postMessage(activeId, "_Agent runs need the desktop app._");
+        return;
+      }
+      const prompt = [
+        "A teammate highlighted one message in this channel and asked you to act on it.",
+        "",
+        `--- message from ${ev.actor_handle} at ${ev.created_at} (id ${ev.id}) ---`,
+        ev.body ?? "",
+        "--- end of message ---",
+        "",
+        `Their instruction: ${instruction}`,
+        "",
+        `Reply in that message's own thread: call post_message with reply_to "${ev.id}",`,
+        "so the answer sits under what was asked instead of landing loose in the channel.",
+        "Use get_channel or search_context first if you need the surrounding conversation.",
+      ].join("\n");
+
+      setTranscripts((prev) => ({ ...prev, [activeId]: [] }));
+      const r = await b.agent.run(activeId, prompt, true, { id: me.id, handle: me.handle });
+      if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
+    },
+    [activeId, api, me],
+  );
+
   const voice = useVoice(socket, peerId, api.baseUrl, api.authToken);
 
   const active = channels.find((t) => t.id === activeId) ?? null;
@@ -426,6 +460,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
               me={me}
               onChange={refreshMemory}
               onOpenThread={setOpenThread}
+              onAskAgent={askAgent}
             />
           </div>
           {agentRun?.channelId === activeId && (
@@ -757,6 +792,7 @@ function Stream({
   me,
   onChange,
   onOpenThread,
+  onAskAgent,
 }: {
   events: Event[];
   widgets: WidgetRow[];
@@ -764,6 +800,7 @@ function Stream({
   me: { id: string };
   onChange: () => void;
   onOpenThread: (rootId: string) => void;
+  onAskAgent: (e: Event, instruction: string) => Promise<void>;
 }) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -796,6 +833,7 @@ function Stream({
               mine={e.actor_id === me.id}
               api={api}
               onOpenThread={onOpenThread}
+              onAskAgent={onAskAgent}
             />
           );
         }
@@ -1162,18 +1200,22 @@ function Message({
   mine,
   api,
   onOpenThread,
+  onAskAgent,
   inThread = false,
 }: {
   e: Event;
   mine: boolean;
   api: Api;
   onOpenThread?: (rootId: string) => void;
+  onAskAgent?: (e: Event, instruction: string) => Promise<void>;
   inThread?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.body ?? "");
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [instruction, setInstruction] = useState("");
   const isAgent = e.actor_kind === "agent";
 
   // The confirm state reverts on its own: an armed Delete button left hanging
@@ -1225,7 +1267,7 @@ function Message({
           {isAgent && <span className="badge">agent</span>}
           <span className="msg-time">{time(e.created_at)}</span>
           {e.edited && <span className="msg-edited" title="edited — earlier versions remain in the log">edited</span>}
-          {mine && !editing && (
+          {!editing && (
             <span className={`msg-actions${confirming ? " confirming" : ""}`}>
               {confirming ? (
                 <>
@@ -1237,8 +1279,17 @@ function Message({
                 </>
               ) : (
                 <>
-                  <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
-                  <button className="danger" onClick={() => setConfirming(true)}>Delete</button>
+                  {onAskAgent && !asking && (
+                    <button className="ask" onClick={() => setAsking(true)}>
+                      Ask agent
+                    </button>
+                  )}
+                  {mine && (
+                    <>
+                      <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
+                      <button className="danger" onClick={() => setConfirming(true)}>Delete</button>
+                    </>
+                  )}
                 </>
               )}
             </span>
@@ -1274,6 +1325,48 @@ function Message({
             {refs.map((r) => (
               <span className="ref" key={r}>{r}</span>
             ))}
+          </div>
+        )}
+
+        {asking && onAskAgent && (
+          <div className="ask-box">
+            <div className="ask-quote">{(e.body ?? "").slice(0, 160)}</div>
+            <div className="composer-box">
+              <textarea
+                autoFocus
+                rows={1}
+                value={instruction}
+                placeholder="What should the agent do with this?"
+                onChange={(ev) => setInstruction(ev.target.value)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Escape") setAsking(false);
+                  if (ev.key === "Enter" && !ev.shiftKey) {
+                    ev.preventDefault();
+                    const text = instruction.trim();
+                    if (!text) return;
+                    setAsking(false);
+                    setInstruction("");
+                    void onAskAgent(e, text);
+                  }
+                }}
+              />
+              <button
+                className="send"
+                disabled={!instruction.trim()}
+                onClick={() => {
+                  const text = instruction.trim();
+                  if (!text) return;
+                  setAsking(false);
+                  setInstruction("");
+                  void onAskAgent(e, text);
+                }}
+              >
+                Ask
+              </button>
+            </div>
+            <div className="ask-hint">
+              The agent gets this message plus your instruction, and replies in its thread.
+            </div>
           </div>
         )}
 
