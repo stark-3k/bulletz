@@ -130,7 +130,7 @@ export function VoiceBar({
             <div className="share-picker-head">Screen Recording permission needed</div>
             <p className="share-perm-body">
               macOS gates screen capture per app, and it cannot be requested from code. Enable
-              bulletz under <strong>Privacy &amp; Security → Screen &amp; System Audio Recording</strong>,
+              Bulletz under <strong>Privacy &amp; Security → Screen &amp; System Audio Recording</strong>,
               then relaunch the app — the permission only takes effect on a fresh launch.
             </p>
             <div className="share-perm-actions">

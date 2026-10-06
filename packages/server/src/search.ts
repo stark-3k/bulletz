@@ -4,7 +4,7 @@ import { getProject, listConstraints, listDecisions, listTasks, channelEvents } 
 
 /** Unit weights. Extracted units rank above raw chat on purpose: a decision is
  *  worth more to a caller than the twelve messages that produced it. */
-const WEIGHTS = { decision: 3.0, constraint: 2.5, task: 1.6, rollup: 1.4, event: 1.0 };
+const WEIGHTS = { decision: 3.0, constraint: 2.5, note: 2.0, task: 1.6, rollup: 1.4, event: 1.0 };
 
 /** Postgres `websearch_to_tsquery` ANDs every term, so one unmatched word
  *  returns nothing — useless for an agent asking a loose question. We OR the
@@ -91,12 +91,28 @@ export async function search(
        where t.workspace_id = $1 and t.search @@ tsq.query
          and t.status not in ('done','cancelled')
     ),
+    -- A note is prose someone wrote on purpose, so it outranks a task title and
+    -- any single chat message — but never a decision or a constraint, which are
+    -- the units that actually bind. Archived notes drop out, same as archived
+    -- channels: "archived" has to mean an agent stops reading it.
+    nt as (
+      select 'note'::text, n.id::text, ts_rank(n.search, tsq.query),
+             nullif(n.title, '') as title,
+             coalesce(nullif(n.title,'') || E'\n', '') || coalesce(n.body,'') as text,
+             n.channel_id, c.handle, n.updated_at as created_at, '{}'::text[]
+        from notes n left join actors c on c.id = n.created_by, tsq
+       where n.workspace_id = $1 and n.search @@ tsq.query
+         and n.status = 'active'
+         and ($3::uuid is null or n.channel_id = $3::uuid)
+    ),
     all_units as (select * from ev union all select * from dec
-                  union all select * from con union all select * from tk)
+                  union all select * from con union all select * from tk
+                  union all select * from nt)
     select unit, id, title, text, channel_id, actor_handle, created_at, source_event_ids,
            (rank
              * case unit when 'decision' then ${WEIGHTS.decision}
                          when 'constraint' then ${WEIGHTS.constraint}
+                         when 'note' then ${WEIGHTS.note}
                          when 'task' then ${WEIGHTS.task}
                          else ${WEIGHTS.event} end
              * (1.0 / (1.0 + extract(epoch from (now() - created_at)) / 2592000.0))

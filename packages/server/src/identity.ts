@@ -70,13 +70,16 @@ export async function revokeSession(sessionId: string, actorId: string) {
   );
 }
 
-export async function listSessions(actorId: string) {
+export async function listSessions(actorId: string, currentId?: string | null) {
+  // `current` is flagged here rather than compared in the client: the client
+  // never sees its own session id, only the opaque token.
   return q(
-    `select id, user_agent, ip, created_at, last_used_at, expires_at
+    `select id, user_agent, ip, created_at, last_used_at, expires_at,
+            (id = $2) as current
        from sessions
       where actor_id = $1 and revoked_at is null and expires_at > now()
-      order by last_used_at desc`,
-    [actorId],
+      order by last_used_at desc nulls last`,
+    [actorId, currentId ?? null],
   );
 }
 

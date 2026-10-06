@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Decision, Event, Task, Channel } from "@bulletz/shared";
+import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
+import { Settings } from "./Settings.tsx";
+import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
+import { serverSource } from "./server.ts";
 import { Onboarding, type OnboardingState } from "./Onboarding.tsx";
 import {
   TerminalPane,
@@ -14,6 +17,8 @@ import { Widget, type WidgetRow } from "./Widget.tsx";
 import { Apps } from "./Apps.tsx";
 import { useVoice } from "./Voice.tsx";
 import { VoiceBar } from "./VoiceBar.tsx";
+import logoUrl from "../public/logo.svg";
+import markUrl from "../public/mark.svg";
 
 const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
@@ -38,16 +43,32 @@ export function App() {
   );
   const [me, setMe] = useState<{ id: string; handle: string; kind: string; role: string } | null>(null);
   const [authErr, setAuthErr] = useState("");
+  const [probe, setProbe] = useState(0);
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  const [unreachable, setUnreachable] = useState("");
 
   // Ask the server whether anyone has set this up yet, before offering a
-  // sign-in nobody can satisfy.
+  // sign-in nobody can satisfy. A failure here is NOT "no setup needed": it
+  // means we never reached the server, and pretending otherwise renders a form
+  // that can only fail with nothing on screen explaining why.
   useEffect(() => {
+    if (serverSource() === "none") return;
     void bootstrap
       .status()
-      .then((r) => setNeedsSetup(r.needsSetup))
-      .catch(() => setNeedsSetup(false));
-  }, []);
+      .then((r) => {
+        setUnreachable("");
+        setNeedsSetup(r.needsSetup);
+      })
+      .catch((e: Error) =>
+        // "Failed to fetch" is what the browser says and tells nobody
+        // anything; the useful version names the thing to check.
+        setUnreachable(
+          /failed to fetch|networkerror|load failed/i.test(e.message)
+            ? "No answer at that address. Check it is running and reachable from here."
+            : e.message || "No answer from the server.",
+        ),
+      );
+  }, [probe]);
 
   const api = useMemo(() => (token ? new Api(token) : null), [token]);
 
@@ -69,6 +90,13 @@ export function App() {
     };
   }, [api]);
 
+  // A downloaded app that has never been told where its workspace lives.
+  if (serverSource() === "none") {
+    return <Connect onConnected={() => location.reload()} />;
+  }
+  if (unreachable) {
+    return <Unreachable error={unreachable} onRetry={() => setProbe((n) => n + 1)} />;
+  }
   if (needsSetup === null) return <div className="auth" />;
   if (needsSetup) {
     return (
@@ -94,7 +122,17 @@ export function App() {
       />
     );
   }
-  return <Workspace api={api} me={me} />;
+  const signOut = () => {
+    // Revoke server-side first, but never let a failed call strand someone on
+    // a screen they are trying to leave: the local token goes either way.
+    void api.logout().catch(() => {});
+    localStorage.removeItem(TOKEN_KEY);
+    setMe(null);
+    setAuthErr("");
+    setToken("");
+  };
+
+  return <Workspace api={api} me={me} onSignOut={signOut} />;
 }
 
 /** Sign-in. Three ways in, because three different things need to get in: a
@@ -133,7 +171,7 @@ function Setup({ onDone }: { onDone: (token: string) => void }) {
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <h1>
-          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
+          <img className="logo-mark" src={logoUrl} alt="bulletz.ai" />
         </h1>
         <p>Nobody has set up this server yet. You will be its owner.</p>
         {err && <div className="auth-err">{err}</div>}
@@ -147,13 +185,14 @@ function Setup({ onDone }: { onDone: (token: string) => void }) {
           {busy ? "…" : "Create workspace"}
         </button>
         <div className="auth-note">An agent identity and #general are created with it.</div>
+        <ServerPicker onChanged={() => location.reload()} />
       </form>
     </div>
   );
 }
 
 function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => void }) {
-  const [mode, setMode] = useState<"login" | "invite" | "token">("login");
+  const [mode, setMode] = useState<"login" | "invite" | "token" | "reset">("login");
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -171,6 +210,9 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
         if (token.trim()) onSubmit(token.trim());
       } else if (mode === "login") {
         const r = await auth.login(handle.trim(), password);
+        onSubmit(r.token);
+      } else if (mode === "reset") {
+        const r = await auth.reset(code.trim(), password);
         onSubmit(r.token);
       } else {
         const r = await auth.accept({
@@ -192,12 +234,12 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
     <div className="auth">
       <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <h1>
-          <img className="logo-mark" src="/logo.svg" alt="bulletz.ai" />
+          <img className="logo-mark" src={logoUrl} alt="bulletz.ai" />
         </h1>
         <p>The context layer for local coding agents.</p>
 
         <div className="auth-tabs">
-          {(["login", "invite", "token"] as const).map((m) => (
+          {(["login", "invite", "reset", "token"] as const).map((m) => (
             <button
               key={m}
               type="button"
@@ -207,7 +249,13 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
                 setErr("");
               }}
             >
-              {m === "login" ? "Sign in" : m === "invite" ? "I have an invite" : "Token"}
+              {m === "login"
+                ? "Sign in"
+                : m === "invite"
+                  ? "Invite"
+                  : m === "reset"
+                    ? "Reset"
+                    : "Token"}
             </button>
           ))}
         </div>
@@ -219,6 +267,23 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
             <label htmlFor="tok">Workspace or API token</label>
             <input id="tok" value={token} onChange={(e) => setToken(e.target.value)} placeholder="blz_…" autoFocus />
             <div className="auth-note">For agents, the MCP bridge, and local development.</div>
+          </>
+        ) : mode === "reset" ? (
+          <>
+            <label htmlFor="rcode">Reset code</label>
+            <input id="rcode" value={code} onChange={(e) => setCode(e.target.value)} placeholder="blz_r_…" autoFocus />
+            <label htmlFor="rpw">New password</label>
+            <input
+              id="rpw"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="at least 10 characters"
+            />
+            <div className="auth-note">
+              There is no email on this server, so an admin issues the code. Ask one of them in
+              Settings → Members. Codes last 2 hours and work once.
+            </div>
           </>
         ) : (
           <>
@@ -254,8 +319,28 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
         )}
 
         <button className="send" type="submit" disabled={busy}>
-          {busy ? "…" : mode === "invite" ? "Create account" : "Connect"}
+          {busy
+            ? "…"
+            : mode === "invite"
+              ? "Create account"
+              : mode === "reset"
+                ? "Set password"
+                : "Connect"}
         </button>
+
+        {mode === "login" && (
+          // There is no register button and there will not be one: accounts
+          // come from invites. Saying so beats letting someone hunt for it.
+          <div className="auth-note">
+            No account? This workspace is invite-only — ask an admin for a code, then open{" "}
+            <button type="button" className="linklike" onClick={() => setMode("invite")}>
+              Invite
+            </button>
+            .
+          </div>
+        )}
+
+        <ServerPicker onChanged={() => location.reload()} />
       </form>
     </div>
   );
@@ -264,9 +349,11 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
 function Workspace({
   api,
   me,
+  onSignOut,
 }: {
   api: Api;
   me: { id: string; handle: string; kind: string; role: string };
+  onSignOut: () => void;
 }) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -275,10 +362,14 @@ function Workspace({
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [constraints, setConstraints] = useState<Constraint[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Archived notes are fetched too: the Notes app offers a toggle for them, and
+  // a second round trip to reveal a handful of rows is not worth it.
+  const [notes, setNotes] = useState<Note[]>([]);
   const [presence, setPresence] = useState<Presence[]>([]);
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [onboardDismissed, setOnboardDismissed] = useState(
     () => localStorage.getItem("bulletz.onboardDone") === "1",
@@ -300,10 +391,11 @@ function Workspace({
   activeRef.current = activeId;
 
   const refreshMemory = useCallback(async () => {
-    const [d, c, t, p, w, proj] = await Promise.all([
+    const [d, c, t, n, p, w, proj] = await Promise.all([
       api.decisions(),
       api.constraints(),
       api.tasks(),
+      api.notes(true),
       api.presence(),
       api.widgets(),
       api.project(),
@@ -312,6 +404,7 @@ function Workspace({
     setDecisions(d.decisions);
     setConstraints(c.constraints);
     setTasks(t.tasks);
+    setNotes(n.notes);
     setPresence(p.presence);
     setWidgets(w.widgets as WidgetRow[]);
     try {
@@ -370,6 +463,19 @@ function Workspace({
         } else if (type === "channel") {
           const th = m["channel"] as unknown as Channel;
           setChannels((prev) => (prev.some((p) => p.id === th.id) ? prev : [th, ...prev]));
+        } else if (type === "note") {
+          // Merged in place rather than triggering refreshMemory: notes
+          // autosave, so a refetch of everything per keystroke-batch would put
+          // the whole workspace behind one person typing. The broadcast already
+          // carries the full row.
+          const note = m["note"] as unknown as Note;
+          setNotes((prev) => {
+            const idx = prev.findIndex((p) => p.id === note.id);
+            if (idx < 0) return [note, ...prev];
+            const next = [...prev];
+            next[idx] = note;
+            return next;
+          });
         } else if (type === "decision" || type === "task" || type === "presence" || type === "widget") {
           void refreshMemory();
         }
@@ -535,8 +641,8 @@ function Workspace({
             this height, and the name worth showing here is the workspace, not
             the product. The full wordmark lives on the sign-in screen. */}
         <div className="logo" title="bulletz.ai">
-          <img className="logo-mark" src="/mark.svg" alt="bulletz.ai" />
-          <span className="logo-workspace">{project?.name ?? "bulletz"}</span>
+          <img className="logo-mark" src={markUrl} alt="bulletz.ai" />
+          <span className="logo-workspace">{project?.name ?? "Bulletz"}</span>
         </div>
         <div className="nav">
           {(["chat", "apps"] as const).map((s) => (
@@ -553,17 +659,35 @@ function Workspace({
           ))}
         </div>
         <span className="sep" />
-        <div className="conn">
-          <span className={`conn-dot${connected ? " on" : ""}`} />
-          {connected ? "live" : "offline"} · {me.handle}
-        </div>
+        <AccountMenu
+          me={me}
+          connected={connected}
+          onSettings={() => setSettingsOpen(true)}
+          onSignOut={onSignOut}
+        />
       </div>
+
+      {settingsOpen && (
+        <Settings
+          api={api}
+          me={me}
+          onClose={() => setSettingsOpen(false)}
+          onSignOut={onSignOut}
+        />
+      )}
 
       <div
         className={`${surface === "apps" ? "panes panes-apps" : "panes"}${memOpen ? "" : " mem-collapsed"}`}
       >
         {surface === "apps" ? (
-          <Apps api={api} tasks={tasks} widgets={widgets} me={me} onChange={refreshMemory} />
+          <Apps
+            api={api}
+            tasks={tasks}
+            notes={notes}
+            widgets={widgets}
+            me={me}
+            onChange={refreshMemory}
+          />
         ) : (
         <>
         <div className="pane">
@@ -1737,6 +1861,82 @@ function Composer({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+
+/** The handle in the chrome was a label; it is the way out of the app now.
+ *  Sign out and settings had no entry point at all before this. */
+function AccountMenu({
+  me,
+  connected,
+  onSettings,
+  onSignOut,
+}: {
+  me: { handle: string; role: string };
+  connected: boolean;
+  onSettings: () => void;
+  onSignOut: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+
+  // Click-away and Esc. A menu pinned open behind a modal is a trap.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    window.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      window.removeEventListener("keydown", key);
+    };
+  }, [open]);
+
+  return (
+    <div className="account" ref={box}>
+      <button
+        className={`account-btn${open ? " open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        title={`${me.handle} · ${me.role}`}
+      >
+        <span className={`conn-dot${connected ? " on" : ""}`} />
+        {me.handle}
+        <span className="caret">▾</span>
+      </button>
+
+      {open && (
+        <div className="menu account-menu">
+          <div className="menu-head">
+            <strong>{me.handle}</strong>
+            <span className="muted">
+              {me.role} · {connected ? "connected" : "offline"}
+            </span>
+          </div>
+          <button
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              onSettings();
+            }}
+          >
+            Settings
+          </button>
+          <button
+            className="menu-item danger"
+            onClick={() => {
+              setOpen(false);
+              onSignOut();
+            }}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }

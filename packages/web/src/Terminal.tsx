@@ -19,7 +19,17 @@ type Bridge = {
     onData: (cb: (id: string, data: string) => void) => () => void;
     onExit: (cb: (id: string, code: number) => void) => () => void;
   };
+  server?: {
+    get: () => Promise<string | null>;
+    set: (url: string | null) => Promise<string | null>;
+  };
+  project?: {
+    get: () => Promise<{ dir: string; chosen: boolean; packaged: boolean }>;
+    choose: () => Promise<{ dir: string; changed: boolean }>;
+  };
   agent?: {
+    setToken?: (token: string | null) => Promise<boolean>;
+    hasToken?: () => Promise<boolean>;
     run: (
       channelId: string,
       prompt: string,

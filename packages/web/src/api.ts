@@ -1,6 +1,11 @@
-import type { Decision, Event, Task, Channel } from "@bulletz/shared";
+import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 
-const BASE = import.meta.env.VITE_BULLETZ_URL ?? "http://localhost:4000";
+import { resolveServer } from "./server.ts";
+
+// Resolved once per load. Changing servers reloads the app rather than trying
+// to re-point live sockets, caches, and an in-flight event stream at a
+// different workspace — that path is all risk and no benefit.
+const BASE = resolveServer();
 
 export type Constraint = {
   id: string;
@@ -16,6 +21,25 @@ export type ProjectLink = {
   label: string;
   url: string;
   notes: string | null;
+};
+
+export type SessionRow = {
+  id: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string;
+  user_agent: string | null;
+  ip: string | null;
+  current?: boolean;
+};
+
+export type TokenRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  actor_handle: string;
 };
 
 export type Project = {
@@ -78,6 +102,7 @@ export const auth = {
   login: (handle: string, password: string) => post("/auth/login", { handle, password }),
   accept: (body: { code: string; handle: string; password: string; display_name?: string; email?: string }) =>
     post("/auth/accept", body),
+  reset: (code: string, password: string) => post("/auth/reset", { code, password }),
 };
 
 async function post(path: string, body: unknown): Promise<{ token: string; expires_at: string }> {
@@ -140,6 +165,18 @@ export class Api {
   }
 
   logout = () => this.call("POST", "/auth/logout", {});
+  updateMe = (patch: { display_name?: string; email?: string | null }) =>
+    this.call<{ actor: Member }>("PATCH", "/me", patch);
+  changePassword = (current: string | undefined, next: string) =>
+    this.call("POST", "/auth/password", { ...(current ? { current } : {}), next });
+  sessions = () => this.call<{ sessions: SessionRow[] }>("GET", "/auth/sessions");
+  revokeSession = (id: string) => this.call("DELETE", `/auth/sessions/${id}`);
+  apiTokens = () => this.call<{ tokens: TokenRow[] }>("GET", "/api-tokens");
+  createApiToken = (name: string) =>
+    this.call<{ id: string; name: string; token: string }>("POST", "/api-tokens", { name });
+  revokeApiToken = (id: string) => this.call("DELETE", `/api-tokens/${id}`);
+  resetMember = (id: string) =>
+    this.call<{ code: string; handle: string; expires_at: string }>("POST", `/members/${id}/reset`, {});
   onboarding = () => this.call<import("./Onboarding.tsx").OnboardingState>("GET", "/onboarding");
   createAgentToken = () =>
     this.call<{ token: string; agent_handle: string }>("POST", "/onboarding/agent-token", {});
@@ -196,6 +233,25 @@ export class Api {
     this.call<{ task: Task }>("POST", "/tasks", input);
   updateTask = (id: string, status: string) =>
     this.call<{ task: Task }>("PATCH", `/tasks/${id}`, { status });
+
+  notes = (includeArchived = false) =>
+    this.call<{ notes: Note[] }>(
+      "GET",
+      `/notes${includeArchived ? "?include_archived=true" : ""}`,
+    );
+  createNote = (input: { title?: string; body?: string; channel_id?: string }) =>
+    this.call<{ note: Note }>("POST", "/notes", input);
+  updateNote = (
+    id: string,
+    patch: {
+      title?: string;
+      body?: string;
+      labels?: string[];
+      pinned?: boolean;
+      status?: "active" | "archived";
+    },
+  ) => this.call<{ note: Note }>("PATCH", `/notes/${id}`, patch);
+
   presence = () => this.call<{ presence: Presence[] }>("GET", "/presence");
 
   project = () => this.call<Project>("GET", "/project");

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Api } from "./api.ts";
+import { bridge } from "./Terminal.tsx";
 
 /**
  * Getting started.
@@ -153,6 +154,11 @@ export function Onboarding({
               void run(async () => {
                 const r = await api.createAgentToken();
                 setAgentToken(r.token);
+                // Hand it to the desktop app so chat-triggered runs have an
+                // identity to post under. An installed copy has no .env.local
+                // to read it from, so without this the agent runs and then
+                // silently fails to post anything.
+                await bridge()?.agent?.setToken?.(r.token);
               })
             }
           >

@@ -18,7 +18,7 @@ export class ErrorBoundary extends Component<
 
   override componentDidCatch(error: Error, info: ErrorInfo) {
     this.setState({ error, info: info.componentStack ?? null });
-    console.error("[bulletz] render error", error, info.componentStack);
+    console.error("[Bulletz] render error", error, info.componentStack);
   }
 
   override render() {

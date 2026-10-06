@@ -14,6 +14,7 @@ import {
 } from "../identity.js";
 
 const INVITE_HOURS = 72;
+const RESET_HOURS = 2;
 
 export async function authRoutes(app: FastifyInstance) {
   /* ---------------------------- unauthenticated --------------------------- */
@@ -89,6 +90,44 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.code(201).send({ token: session.token, expires_at: session.expires_at });
   });
 
+  /** Redeem a reset code. Unauthenticated by necessity: the point is that the
+      person cannot sign in. */
+  app.post("/auth/reset", async (req, reply) => {
+    const body = z
+      .object({ code: z.string().min(8).max(200), password: z.string().min(10).max(200) })
+      .parse(req.body);
+
+    const reset = await maybeOne<{ id: string; actor_id: string }>(
+      `select id, actor_id from password_resets
+        where code_hash = $1 and used_at is null and revoked_at is null and expires_at > now()`,
+      [sha256(body.code)],
+    );
+    if (!reset) return reply.code(400).send({ error: "reset code is invalid, used, or expired" });
+
+    const actor = await maybeOne<{ id: string; status: string }>(
+      `select id, status from actors where id = $1`,
+      [reset.actor_id],
+    );
+    if (actor?.status !== "active") return reply.code(403).send({ error: "that account is disabled" });
+
+    await q(`update actors set password_hash = $2 where id = $1`, [
+      actor.id,
+      await hashPassword(body.password),
+    ]);
+    await q(`update password_resets set used_at = now() where id = $1`, [reset.id]);
+    // A reset exists because access may be compromised: end every session the
+    // old password could have opened, then start one fresh.
+    await q(`update sessions set revoked_at = now() where actor_id = $1 and revoked_at is null`, [
+      actor.id,
+    ]);
+
+    const session = await createSession(actor.id, {
+      userAgent: req.headers["user-agent"],
+      ip: req.ip,
+    });
+    return { token: session.token, expires_at: session.expires_at };
+  });
+
   /* ----------------------------- authenticated ---------------------------- */
 
   await app.register(async (secured) => {
@@ -99,7 +138,7 @@ export async function authRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
-    secured.get("/auth/sessions", async (req) => ({ sessions: await listSessions(req.actor.id) }));
+    secured.get("/auth/sessions", async (req) => ({ sessions: await listSessions(req.actor.id, req.actor.sessionId) }));
 
     secured.delete("/auth/sessions/:id", async (req, reply) => {
       const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
@@ -132,6 +171,33 @@ export async function authRoutes(app: FastifyInstance) {
         [req.actor.id, req.actor.sessionId ?? null],
       );
       return { ok: true };
+    });
+
+    /** Your own profile. Handle is identity and does not change here: it is
+        how you are addressed in every event already written. */
+    secured.patch("/me", async (req) => {
+      const body = z
+        .object({
+          display_name: z.string().min(1).max(80).optional(),
+          email: z.string().email().max(200).nullish(),
+        })
+        .refine((v) => Object.keys(v).length > 0, "nothing to change")
+        .parse(req.body);
+
+      const actor = await one(
+        `update actors
+            set display_name = coalesce($2, display_name),
+                email = case when $3::boolean then $4 else email end
+          where id = $1
+          returning id, handle, display_name, email, role`,
+        [
+          req.actor.id,
+          body.display_name ?? null,
+          body.email !== undefined,
+          body.email ?? null,
+        ],
+      );
+      return { actor };
     });
 
     /* -------------------------------- members ------------------------------- */
@@ -247,6 +313,42 @@ export async function authRoutes(app: FastifyInstance) {
         );
       }
       return { member };
+    });
+
+    /** Mint a reset code for someone who is locked out. There is no mail here,
+        so the code goes back to the admin to hand over out of band. */
+    secured.post("/members/:id/reset", async (req, reply) => {
+      const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+      if (!can(req.actor, "manage_members")) {
+        return reply.code(403).send({ error: "only an admin can reset a password" });
+      }
+      const target = await maybeOne<{ id: string; handle: string; role: string; kind: string }>(
+        `select id, handle, role, kind from actors where id = $1 and workspace_id = $2`,
+        [id, req.actor.workspace_id],
+      );
+      if (!target) return reply.code(404).send({ error: "member not found" });
+      if (target.kind !== "human") return reply.code(400).send({ error: "agents do not have passwords" });
+      // Same rule as unseating: an admin must not be able to seize an owner's
+      // account by resetting their way into it.
+      if (target.role === "owner" && !can(req.actor, "manage_owners")) {
+        return reply.code(403).send({ error: "only an owner can reset an owner" });
+      }
+
+      // One live code per person: minting a new one retires the last.
+      await q(
+        `update password_resets set revoked_at = now()
+          where actor_id = $1 and used_at is null and revoked_at is null`,
+        [target.id],
+      );
+      const code = secret("blz_r");
+      const row = await one<{ id: string; expires_at: string }>(
+        `insert into password_resets (actor_id, code_hash, created_by, expires_at)
+         values ($1, $2, $3, now() + ($4 || ' hours')::interval)
+         returning id, expires_at`,
+        [target.id, sha256(code), req.actor.id, String(RESET_HOURS)],
+      );
+      // The only time the code is ever visible. It is stored hashed.
+      return reply.code(201).send({ id: row.id, code, handle: target.handle, expires_at: row.expires_at });
     });
 
     /* ------------------------------ api tokens ------------------------------ */

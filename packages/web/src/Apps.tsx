@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Task } from "@bulletz/shared";
+import type { Note, Task } from "@bulletz/shared";
 import type { Api, Invite, Member } from "./api.ts";
 import { Embed } from "./Embed.tsx";
+import { Notes } from "./Notes.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 
 /** The apps surface. A widget pinned into a chat message is an attachment;
@@ -16,18 +17,20 @@ const COLUMNS = [
 ] as const;
 
 type AppId =
-  | { type: "builtin"; id: "board" | "registry" | "site" | "members" }
+  | { type: "builtin"; id: "board" | "notes" | "registry" | "site" | "members" }
   | { type: "widget"; id: string };
 
 export function Apps({
   api,
   tasks,
+  notes,
   widgets,
   me,
   onChange,
 }: {
   api: Api;
   tasks: Task[];
+  notes: Note[];
   widgets: WidgetRow[];
   me: { id: string; handle: string; role: string };
   onChange: () => void;
@@ -49,6 +52,18 @@ export function Apps({
             <span>
               Task board
               <span className="app-sub">{tasks.filter((t) => t.status !== "done").length} open</span>
+            </span>
+          </button>
+          <button
+            className={`app-item${isSel({ type: "builtin", id: "notes" }) ? " active" : ""}`}
+            onClick={() => setSel({ type: "builtin", id: "notes" })}
+          >
+            <span className="app-glyph">▤</span>
+            <span>
+              Notes
+              <span className="app-sub">
+                {notes.filter((n) => n.status === "active").length} active
+              </span>
             </span>
           </button>
           <button
@@ -106,6 +121,9 @@ export function Apps({
         {sel.type === "builtin" && sel.id === "board" && (
           <TaskBoard api={api} tasks={tasks} onChange={onChange} />
         )}
+        {sel.type === "builtin" && sel.id === "notes" && (
+          <Notes api={api} notes={notes} onChange={onChange} />
+        )}
         {sel.type === "builtin" && sel.id === "registry" && (
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
@@ -136,6 +154,7 @@ function Members({ api, me }: { api: Api; me: { id: string; handle: string; role
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [fresh, setFresh] = useState<{ code: string; role: string } | null>(null);
+  const [reset, setReset] = useState<{ handle: string; code: string } | null>(null);
   const [role, setRole] = useState("member");
   const [err, setErr] = useState("");
   const admin = me.role === "owner" || me.role === "admin";
@@ -174,6 +193,22 @@ function Members({ api, me }: { api: Api; me: { id: string; handle: string; role
       </div>
 
       {err && <div className="members-err">{err}</div>}
+
+      {reset && (
+        <div className="reset-banner">
+          <span>
+            Reset code for <strong>{reset.handle}</strong> — valid 2 hours, one use. Send it to
+            them; they redeem it under <em>Reset</em> on the sign-in screen.
+          </span>
+          <code>{reset.code}</code>
+          <button className="voice-ctl" onClick={() => void navigator.clipboard?.writeText(reset.code)}>
+            Copy
+          </button>
+          <button className="voice-ctl" onClick={() => setReset(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {admin && (
         <div className="invite-row">
@@ -233,6 +268,22 @@ function Members({ api, me }: { api: Api; me: { id: string; handle: string; role
               </select>
             ) : (
               <span className="member-role-static">{m.role}</span>
+            )}
+            {admin && m.kind === "human" && (
+              <button
+                className="voice-ctl"
+                title="Issue a one-time code this person can use to set a new password"
+                onClick={() =>
+                  void act(async () => {
+                    const r = await api.resetMember(m.id);
+                    // There is no mail server here, so the code has to come back
+                    // to the admin to hand over however they already talk.
+                    setReset({ handle: r.handle, code: r.code });
+                  })
+                }
+              >
+                Reset password
+              </button>
             )}
             {admin && m.id !== me.id && (
               <button

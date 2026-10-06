@@ -1,10 +1,12 @@
 import {
   CreateConstraintInput,
   CreateDecisionInput,
+  CreateNoteInput,
   CreateTaskInput,
   PostEventInput,
   PresenceInput,
   SearchInput,
+  UpdateNoteInput,
 } from "@bulletz/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -432,6 +434,87 @@ export async function apiRoutes(app: FastifyInstance) {
     broadcast(req.actor.workspace_id, { type: "task", task });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return { task };
+  });
+
+  /* -------------------------------- notes -------------------------------- */
+
+  app.get("/notes", async (req) => {
+    const query = z
+      .object({
+        include_archived: z.coerce.boolean().default(false),
+        labels: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(500).default(200),
+      })
+      .parse(req.query);
+    return {
+      notes: await repo.listNotes(req.actor.workspace_id, {
+        includeArchived: query.include_archived,
+        labels: query.labels?.split(",").filter(Boolean),
+        limit: query.limit,
+      }),
+    };
+  });
+
+  app.post("/notes", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
+    const input = CreateNoteInput.parse(req.body);
+    if (input.channel_id) {
+      const channel = await repo.getChannel(req.actor.workspace_id, input.channel_id);
+      if (!channel) return reply.code(404).send({ error: "channel not found" });
+    }
+    const note = await repo.createNote({
+      workspaceId: req.actor.workspace_id,
+      channelId: input.channel_id ?? null,
+      title: input.title,
+      body: input.body,
+      labels: input.labels,
+      pinned: input.pinned,
+      createdBy: req.actor.id,
+    });
+
+    // Creating a note is logged; editing it is not. An autosaved document would
+    // otherwise bury the channel in near-identical events, and the note's own
+    // row already carries updated_by/updated_at for "who changed this".
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      channelId: input.channel_id ?? null,
+      actorId: req.actor.id,
+      kind: "note_created",
+      body: note.title || "(untitled note)",
+      payload: { note_id: note.id },
+    });
+    broadcast(req.actor.workspace_id, { type: "note", note });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return reply.code(201).send({ note });
+  });
+
+  app.patch("/notes/:id", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const input = UpdateNoteInput.parse(req.body);
+
+    const before = await repo.getNote(req.actor.workspace_id, id);
+    if (!before) return reply.code(404).send({ error: "note not found" });
+
+    const note = await repo.updateNote(req.actor.workspace_id, id, input, req.actor.id);
+    if (!note) return reply.code(404).send({ error: "note not found" });
+
+    // Only a status flip is worth an event: it is the one change that removes a
+    // shared surface (or brings it back), which is exactly what a teammate
+    // scrolling the log needs to be able to see.
+    if (input.status && input.status !== before.status) {
+      const event = await repo.appendEvent({
+        workspaceId: req.actor.workspace_id,
+        channelId: note.channel_id,
+        actorId: req.actor.id,
+        kind: input.status === "archived" ? "note_archived" : "note_restored",
+        body: note.title || "(untitled note)",
+        payload: { note_id: note.id },
+      });
+      broadcast(req.actor.workspace_id, { type: "event", event });
+    }
+    broadcast(req.actor.workspace_id, { type: "note", note });
+    return { note };
   });
 
   /* ------------------------------ retrieval ------------------------------ */

@@ -1,4 +1,4 @@
-import type { Decision, Event, SearchHit, Task, Channel } from "@bulletz/shared";
+import type { Decision, Event, Note, SearchHit, Task, Channel } from "@bulletz/shared";
 import { maybeOne, one, q } from "./db.js";
 
 const EVENT_COLS = `
@@ -367,6 +367,111 @@ export async function updateTask(
                 created_at, updated_at`,
     [workspaceId, taskId, patch.status ?? null, patch.title ?? null, patch.body ?? null, patch.labels ?? null],
   );
+}
+
+/* ---------------------------------- notes --------------------------------- */
+
+const NOTE_COLS = `
+  n.id, n.workspace_id, n.channel_id, n.title, n.body, n.labels, n.pinned, n.status,
+  n.created_by, c.handle as created_by_handle,
+  n.updated_by, u.handle as updated_by_handle,
+  n.created_at, n.updated_at`;
+
+const NOTE_JOINS = `
+  from notes n
+  left join actors c on c.id = n.created_by
+  left join actors u on u.id = n.updated_by`;
+
+export async function createNote(input: {
+  workspaceId: string;
+  channelId: string | null;
+  title: string;
+  body: string;
+  labels: string[];
+  pinned: boolean;
+  createdBy: string;
+}): Promise<Note> {
+  const row = await one<{ id: string }>(
+    `insert into notes (workspace_id, channel_id, title, body, labels, pinned,
+                        created_by, updated_by)
+     values ($1,$2,$3,$4,$5::text[],$6,$7,$7) returning id`,
+    [
+      input.workspaceId,
+      input.channelId,
+      input.title,
+      input.body,
+      input.labels,
+      input.pinned,
+      input.createdBy,
+    ],
+  );
+  // Re-read through the join so a created note has the same shape as a listed
+  // one — the client renders both from the same component.
+  return (await getNote(input.workspaceId, row.id)) as Note;
+}
+
+export async function getNote(workspaceId: string, id: string): Promise<Note | null> {
+  return maybeOne<Note>(
+    `select ${NOTE_COLS} ${NOTE_JOINS} where n.workspace_id = $1 and n.id = $2`,
+    [workspaceId, id],
+  );
+}
+
+export async function listNotes(
+  workspaceId: string,
+  opts: { includeArchived?: boolean; labels?: string[] | undefined; limit?: number } = {},
+): Promise<Note[]> {
+  return q<Note>(
+    `select ${NOTE_COLS} ${NOTE_JOINS}
+      where n.workspace_id = $1
+        and ($2::boolean or n.status = 'active')
+        and ($3::text[] is null or n.labels && $3::text[])
+      order by n.pinned desc, n.updated_at desc
+      limit $4`,
+    [workspaceId, opts.includeArchived ?? false, opts.labels ?? null, opts.limit ?? 200],
+  );
+}
+
+/** Last write wins, by design — see sql/009_notes.sql. `updated_by` records who
+ *  touched it last so a surprising change has a name attached to it. */
+export async function updateNote(
+  workspaceId: string,
+  id: string,
+  patch: {
+    title?: string | undefined;
+    body?: string | undefined;
+    labels?: string[] | undefined;
+    pinned?: boolean | undefined;
+    status?: string | undefined;
+  },
+  actorId: string,
+): Promise<Note | null> {
+  const updated = await maybeOne<{ id: string }>(
+    `update notes set
+       title  = coalesce($3, title),
+       -- body is coalesced on an explicit null, so clearing a note to empty
+       -- works: the route only passes a value when the key was present.
+       body   = coalesce($4, body),
+       labels = coalesce($5::text[], labels),
+       pinned = coalesce($6::boolean, pinned),
+       status = coalesce($7, status),
+       updated_by = $8,
+       updated_at = now()
+      where workspace_id = $1 and id = $2
+      returning id`,
+    [
+      workspaceId,
+      id,
+      patch.title ?? null,
+      patch.body ?? null,
+      patch.labels ?? null,
+      patch.pinned ?? null,
+      patch.status ?? null,
+      actorId,
+    ],
+  );
+  if (!updated) return null;
+  return getNote(workspaceId, id);
 }
 
 /** Constraints are retired, never deleted: they sit in the "do not violate"

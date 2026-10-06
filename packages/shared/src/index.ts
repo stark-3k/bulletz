@@ -13,6 +13,9 @@ export const EVENT_KINDS = [
   "file_edit",
   "ci",
   "note",
+  "note_created",
+  "note_archived",
+  "note_restored",
   "agent_turn_start",
   "agent_turn_end",
 ] as const;
@@ -109,6 +112,27 @@ export const Task = z.object({
 });
 export type Task = z.infer<typeof Task>;
 
+/** A note is the one mutable document in the model: a runbook, an
+ *  investigation, a draft that is not yet a decision. Unlike an event it has no
+ *  revision chain — the current text is the whole point of it. */
+export const Note = z.object({
+  id: z.string().uuid(),
+  workspace_id: z.string().uuid(),
+  channel_id: z.string().uuid().nullable(),
+  title: z.string(),
+  body: z.string(),
+  labels: z.array(z.string()),
+  pinned: z.boolean(),
+  status: z.enum(["active", "archived"]),
+  created_by: z.string().uuid().nullable(),
+  created_by_handle: z.string().nullable().optional(),
+  updated_by: z.string().uuid().nullable(),
+  updated_by_handle: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Note = z.infer<typeof Note>;
+
 /* ------------------------------- requests ------------------------------- */
 
 export const PostEventInput = z.object({
@@ -154,6 +178,28 @@ export const CreateTaskInput = z.object({
 });
 export type CreateTaskInput = z.infer<typeof CreateTaskInput>;
 
+/** Both fields optional: the UI creates an empty note and lets the person type
+ *  into it, which is how every notes app that does not annoy people works. */
+export const CreateNoteInput = z.object({
+  channel_id: z.string().uuid().optional(),
+  title: z.string().max(300).default(""),
+  body: z.string().max(200_000).default(""),
+  labels: z.array(z.string()).default([]),
+  pinned: z.boolean().default(false),
+});
+export type CreateNoteInput = z.infer<typeof CreateNoteInput>;
+
+export const UpdateNoteInput = z
+  .object({
+    title: z.string().max(300).optional(),
+    body: z.string().max(200_000).optional(),
+    labels: z.array(z.string()).optional(),
+    pinned: z.boolean().optional(),
+    status: z.enum(["active", "archived"]).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, "nothing to update");
+export type UpdateNoteInput = z.infer<typeof UpdateNoteInput>;
+
 export const SearchInput = z.object({
   query: z.string().min(1).max(500),
   channel_id: z.string().uuid().optional(),
@@ -167,7 +213,7 @@ export type SearchInput = z.infer<typeof SearchInput>;
 /** A search hit. Every hit carries source_event_ids so the caller can always
  *  drill from a derived unit back to raw log events. */
 export const SearchHit = z.object({
-  unit: z.enum(["event", "decision", "constraint", "task", "rollup"]),
+  unit: z.enum(["event", "decision", "constraint", "task", "note", "rollup"]),
   id: z.string(),
   score: z.number(),
   title: z.string().nullable(),
@@ -198,5 +244,6 @@ export type ServerMessage =
   | { type: "channel"; channel: Channel }
   | { type: "decision"; decision: Decision }
   | { type: "task"; task: Task }
+  | { type: "note"; note: Note }
   | { type: "presence"; actor_handle: string; online: boolean }
   | { type: "error"; message: string };
