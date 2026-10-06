@@ -136,6 +136,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   viewport on a short window. Every grid column is `minmax(0, 1fr)` rather than
   `1fr`, because the default refuses to shrink below its content and one wide
   message is enough to push the right-hand panes off the screen.
+- **The browser is a first-class surface, not a degraded one.** The same build
+  serves both, and the parts that genuinely need a machine — a pty, a local
+  agent — say so instead of appearing broken. Chrome adapts rather than
+  pretending: the title bar only reserves space for traffic lights where there
+  are any (desktop, not fullscreen, never a browser tab), and the dock starts
+  collapsed on the web rather than spending 260px explaining itself.
 - **The mark in the chrome, the wordmark at the door.** A 57px-wide wordmark
   is unreadable in a 38px title bar, so the chrome carries the chevron alone at
   20px — the size where the three dots stop merging — beside the *workspace*

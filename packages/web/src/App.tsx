@@ -387,13 +387,15 @@ function Workspace({
   // Live status of a chat-triggered agent turn. The transcript itself arrives
   // as ordinary events over the WebSocket, because the adapter posts it into
   // the channel — so teammates see the work, not just the person who asked.
-  // In fullscreen there are no traffic lights to avoid, so the title bar
-  // reclaims the space it reserves for them.
+  // The title bar only steps aside for traffic lights when there are any:
+  // the desktop app draws them over the top-left, a browser tab does not, and
+  // macOS hides them in fullscreen.
   useEffect(() => {
-    const off = bridge()?.onFullscreen?.((full) => {
+    const b = bridge();
+    document.documentElement.classList.toggle("is-desktop", b !== null);
+    return b?.onFullscreen?.((full) => {
       document.documentElement.classList.toggle("is-fullscreen", full);
     });
-    return off;
   }, []);
 
   useEffect(() => {
@@ -908,7 +910,14 @@ function TerminalDock({
   me: { id: string; handle: string };
 }) {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
-  const [open, setOpen] = useState(() => localStorage.getItem("bulletz.termOpen") !== "0");
+  // Both docked panes are desktop-only — a pty and a local agent — so in a
+  // browser the dock would spend 260px explaining itself. Collapse it there by
+  // default; the header still names what the desktop app adds.
+  const desktop = bridge() !== null;
+  const [open, setOpen] = useState(() => {
+    const stored = localStorage.getItem("bulletz.termOpen");
+    return stored === null ? desktop : stored !== "0";
+  });
   const [tab, setTab] = useState<"terminal" | "agent">(
     () => (localStorage.getItem("bulletz.dockTab") as "terminal" | "agent") ?? "terminal",
   );
