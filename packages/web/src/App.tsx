@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Channel } from "@bulletz/shared";
-import { Api, auth, type Constraint, type Presence, type Project } from "./api.ts";
+import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
+import { Onboarding, type OnboardingState } from "./Onboarding.tsx";
 import {
   TerminalPane,
   bridge,
@@ -37,6 +38,16 @@ export function App() {
   );
   const [me, setMe] = useState<{ id: string; handle: string; kind: string; role: string } | null>(null);
   const [authErr, setAuthErr] = useState("");
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+
+  // Ask the server whether anyone has set this up yet, before offering a
+  // sign-in nobody can satisfy.
+  useEffect(() => {
+    void bootstrap
+      .status()
+      .then((r) => setNeedsSetup(r.needsSetup))
+      .catch(() => setNeedsSetup(false));
+  }, []);
 
   const api = useMemo(() => (token ? new Api(token) : null), [token]);
 
@@ -58,6 +69,19 @@ export function App() {
     };
   }, [api]);
 
+  if (needsSetup === null) return <div className="auth" />;
+  if (needsSetup) {
+    return (
+      <Setup
+        onDone={(t) => {
+          localStorage.setItem(TOKEN_KEY, t);
+          setNeedsSetup(false);
+          setToken(t);
+        }}
+      />
+    );
+  }
+
   if (!api || !me) {
     return (
       <Auth
@@ -76,6 +100,58 @@ export function App() {
 /** Sign-in. Three ways in, because three different things need to get in: a
  *  person with a password, a person holding an invite, and an agent or dev
  *  holding a long-lived token. */
+
+/** First run. Without this the only way to create a workspace was a seed
+ *  script in a terminal, which is fine for whoever wrote it and a dead end
+ *  for everyone else. The endpoint closes itself once a workspace exists. */
+function Setup({ onDone }: { onDone: (token: string) => void }) {
+  const [workspace, setWorkspace] = useState("");
+  const [handle, setHandle] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      const r = await bootstrap.create({
+        workspace: workspace.trim(),
+        handle: handle.trim(),
+        password,
+      });
+      onDone(r.token);
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="auth">
+      <form className="auth-card" onSubmit={(e) => void submit(e)}>
+        <h1>
+          <span className="logo-dot" /> bulletz
+        </h1>
+        <p>Nobody has set up this server yet. You will be its owner.</p>
+        {err && <div className="auth-err">{err}</div>}
+        <label htmlFor="ws">Workspace name</label>
+        <input id="ws" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Acme engineering" autoFocus />
+        <label htmlFor="h">Your handle</label>
+        <input id="h" value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="rishabh" />
+        <label htmlFor="p">Password</label>
+        <input id="p" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="at least 10 characters" />
+        <button className="send" type="submit" disabled={busy || password.length < 10 || !workspace.trim() || !handle.trim()}>
+          {busy ? "…" : "Create workspace"}
+        </button>
+        <div className="auth-note">An agent identity and #general are created with it.</div>
+      </form>
+    </div>
+  );
+}
+
 function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => void }) {
   const [mode, setMode] = useState<"login" | "invite" | "token">("login");
   const [handle, setHandle] = useState("");
@@ -203,6 +279,10 @@ function Workspace({
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  const [onboardDismissed, setOnboardDismissed] = useState(
+    () => localStorage.getItem("bulletz.onboardDone") === "1",
+  );
   const [showArchived, setShowArchived] = useState(
     () => localStorage.getItem("bulletz.showArchived") === "1",
   );
@@ -234,6 +314,11 @@ function Workspace({
     setTasks(t.tasks);
     setPresence(p.presence);
     setWidgets(w.widgets as WidgetRow[]);
+    try {
+      setOnboarding(await api.onboarding());
+    } catch {
+      /* an older server without the endpoint should not break the app */
+    }
   }, [api]);
 
   useEffect(() => {
@@ -535,6 +620,23 @@ function Workspace({
               onMute={voice.setMuted}
               onShare={() => void voice.startShare()}
               onStopShare={() => void voice.stopShare()}
+            />
+          )}
+          {onboarding && !onboardDismissed && (
+            <Onboarding
+              api={api}
+              state={onboarding}
+              onRefresh={refreshMemory}
+              onDismiss={() => {
+                localStorage.setItem("bulletz.onboardDone", "1");
+                setOnboardDismissed(true);
+              }}
+              onGoTo={(where) => {
+                if (where === "members") {
+                  setSurface("apps");
+                  localStorage.setItem("bulletz.surface", "apps");
+                }
+              }}
             />
           )}
           <div className="pane-body">

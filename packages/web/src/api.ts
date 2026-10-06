@@ -62,6 +62,18 @@ export type Presence = {
 };
 
 /** Unauthenticated calls: sign-in happens before there is an Api instance. */
+export const bootstrap = {
+  status: () =>
+    fetch(`${BASE}/v1/bootstrap`).then((r) => r.json() as Promise<{ needsSetup: boolean }>),
+  create: (body: {
+    workspace: string;
+    handle: string;
+    password: string;
+    display_name?: string;
+    email?: string;
+  }) => post("/bootstrap", body),
+};
+
 export const auth = {
   login: (handle: string, password: string) => post("/auth/login", { handle, password }),
   accept: (body: { code: string; handle: string; password: string; display_name?: string; email?: string }) =>
@@ -113,6 +125,9 @@ export class Api {
   }
 
   logout = () => this.call("POST", "/auth/logout", {});
+  onboarding = () => this.call<import("./Onboarding.tsx").OnboardingState>("GET", "/onboarding");
+  createAgentToken = () =>
+    this.call<{ token: string; agent_handle: string }>("POST", "/onboarding/agent-token", {});
   members = () => this.call<{ members: Member[] }>("GET", "/members");
   invites = () => this.call<{ invites: Invite[] }>("GET", "/invites");
   createInvite = (role: string, note?: string) =>

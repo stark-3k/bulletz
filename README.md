@@ -130,6 +130,11 @@ context is a replayable *query* over the log, not a synced copy of it.
 - **Widget refresh never touches a model.** A 30s tick re-invokes the tool
   server-side and pushes rows. If refresh cost an inference the feature would be
   unusable at any scale.
+- **Onboarding is a checklist derived from state, not a wizard with flags.**
+  A step is done when the thing it asks for exists — a project summary, a link,
+  a decision, an agent token, a second member. It therefore cannot claim you
+  have a decision log when you do not, it stays done when a teammate does the
+  work, and it can be dismissed without hiding anything real.
 - **Credentials are revocable, and that is the point.** A workspace token used
   to be a password that never expired: losing a laptop meant rotating everyone.
   Now people sign in with a password and hold a 30-day session they can list
@@ -167,10 +172,17 @@ context is a replayable *query* over the log, not a synced copy of it.
 npm install
 npm run db:up          # Postgres 17 + pgvector in Docker (port 5433)
 npm run db:migrate
-npm run seed -w @bulletz/server     # prints a human token and an agent token
 npm run build
-npm run dev:server     # http://127.0.0.1:4000
+npm run dev            # server on :4000, web on :5174
 ```
+
+Open the app. An empty server offers to create the workspace: name it, pick a
+handle and a password, and you are its owner — with an agent identity and
+`#general` created alongside. `npm run seed` still exists for scripted setups,
+but nobody has to touch a terminal to start.
+
+The endpoint closes itself the moment a workspace exists, so it cannot be used
+to mint an account on someone else's server.
 
 Put the agent token in your environment, then any MCP client can mount the
 bridge. For Claude Code, `.mcp.json` in this repo already does it:
