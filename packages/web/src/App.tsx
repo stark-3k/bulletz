@@ -103,6 +103,8 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     () => localStorage.getItem("bulletz.showArchived") === "1",
   );
   const [agentRun, setAgentRun] = useState<{ channelId: string; status: string } | null>(null);
+  const [transcripts, setTranscripts] = useState<Record<string, AgentRunEvent[]>>({});
+  const [agentBusy, setAgentBusy] = useState(false);
   const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [surface, setSurface] = useState<"chat" | "apps">(
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
@@ -206,7 +208,12 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         : e.type === "error" ? `error: ${e.message.slice(0, 90)}`
         : "working…";
       setAgentRun({ channelId, status });
-      if (e.type === "end" || e.type === "error") setTimeout(() => setAgentRun(null), 6000);
+      setTranscripts((prev) => ({ ...prev, [channelId]: [...(prev[channelId] ?? []), e] }));
+      if (e.type === "start") setAgentBusy(true);
+      if (e.type === "end" || e.type === "error") {
+        setAgentBusy(false);
+        setTimeout(() => setAgentRun(null), 6000);
+      }
     });
     return () => {
       window.removeEventListener("focus", refresh);
@@ -265,6 +272,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       if (!b?.agent) {
         await api.postMessage(activeId, "_Agent runs need the desktop app._");
       } else {
+        setTranscripts((prev) => ({ ...prev, [activeId]: [] }));
         const r = await b.agent.run(activeId, prompt, true);
         if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
       }
@@ -434,7 +442,11 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 
       {/* Workbench-level, outside the surface switch: unmounting the terminal
           kills its pty, so a running job must survive Chat <-> Apps. */}
-      <TerminalDock />
+      <TerminalDock
+        transcript={(activeId && transcripts[activeId]) || []}
+        running={agentBusy && agentRun?.channelId === activeId}
+        onStop={() => activeId && void bridge()?.agent?.stop(activeId)}
+      />
     </div>
   );
 }
@@ -443,14 +455,120 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 /** The terminal is why this is a desktop app: a real pty cannot exist in a
  *  browser tab. Its shell inherits BULLETZ_TOKEN, so `claude` started here
  *  reaches this workspace through the repo's .mcp.json with no extra setup. */
-function TerminalDock() {
+/** The bottom dock holds what is happening on THIS machine: the terminal, and
+ *  the agent's private transcript. Neither is shared — that is the point. */
+
+/** The agent's private transcript. Local to this machine and this window —
+ *  nothing here is in the shared log unless the agent chose to post it. */
+function AgentPane({
+  transcript,
+  running,
+  onStop,
+}: {
+  transcript: AgentRunEvent[];
+  running: boolean;
+  onStop: () => void;
+}) {
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [transcript.length]);
+
+  return (
+    <div className="agent-pane">
+      <div className="agent-pane-bar">
+        <span className={`agent-pane-dot${running ? " live" : ""}`} />
+        <span>{running ? "working locally" : "idle"}</span>
+        <span className="agent-pane-note">private · not in the channel</span>
+        {running && (
+          <button className="icon-btn" onClick={onStop} title="Stop this run">
+            ■
+          </button>
+        )}
+      </div>
+      <div className="agent-pane-body">
+        {transcript.length === 0 && (
+          <div className="empty" style={{ padding: "10px 14px" }}>
+            Nothing yet. Start a run with <code>@agent</code> in a channel.
+          </div>
+        )}
+        {transcript.map((e, i) => {
+          if (e.type === "start")
+            return (
+              <div className="turn-rule" key={i}>
+                <span>turn started · {e.model}</span>
+              </div>
+            );
+          if (e.type === "end")
+            return (
+              <div className="turn-rule" key={i}>
+                <span>
+                  {e.subtype}
+                  {e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}
+                  {e.turns ? ` · ${e.turns} turns` : ""}
+                </span>
+              </div>
+            );
+          if (e.type === "tool")
+            return (
+              <div className="agent-tool" key={i}>
+                <span className="agent-tool-name">{e.name}</span>
+                <span className="agent-tool-args">
+                  {JSON.stringify(e.input ?? {}).slice(0, 160)}
+                </span>
+              </div>
+            );
+          if (e.type === "tool_result")
+            return (
+              <div className={`agent-result${e.ok ? "" : " bad"}`} key={i}>
+                {e.ok ? "ok" : "error"}
+              </div>
+            );
+          if (e.type === "error")
+            return (
+              <div className="agent-err" key={i}>
+                {e.message}
+              </div>
+            );
+          return (
+            <div className="agent-text" key={i}>
+              {e.text}
+            </div>
+          );
+        })}
+        <div ref={end} />
+      </div>
+    </div>
+  );
+}
+
+function TerminalDock({
+  transcript,
+  running,
+  onStop,
+}: {
+  transcript: AgentRunEvent[];
+  running: boolean;
+  onStop: () => void;
+}) {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
   const [open, setOpen] = useState(() => localStorage.getItem("bulletz.termOpen") !== "0");
+  const [tab, setTab] = useState<"terminal" | "agent">(
+    () => (localStorage.getItem("bulletz.dockTab") as "terminal" | "agent") ?? "terminal",
+  );
   const [dragging, setDragging] = useState(false);
-  const desktop = bridge() !== null;
+  const prevLen = useRef(0);
+
+  // Surface the agent tab when a run starts producing, so private work is not
+  // invisible work — but never steal the tab away from a terminal in use.
+  useEffect(() => {
+    if (transcript.length > prevLen.current && prevLen.current === 0) setTab("agent");
+    prevLen.current = transcript.length;
+  }, [transcript.length]);
 
   useEffect(() => localStorage.setItem("bulletz.termH", String(height)), [height]);
   useEffect(() => localStorage.setItem("bulletz.termOpen", open ? "1" : "0"), [open]);
+  useEffect(() => localStorage.setItem("bulletz.dockTab", tab), [tab]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -476,13 +594,35 @@ function TerminalDock() {
       <div className="term-panel" style={{ height: open ? height : 28 }}>
         <div className="pane-head" style={{ borderBottom: "none", paddingBottom: 6 }}>
           <div className="tab-row">
-            <button className="tab active">Terminal</button>
+            <button
+              className={`tab${tab === "terminal" ? " active" : ""}`}
+              onClick={() => setTab("terminal")}
+            >
+              Terminal
+            </button>
+            <button
+              className={`tab${tab === "agent" ? " active" : ""}`}
+              onClick={() => setTab("agent")}
+            >
+              Agent
+              {running && <span className="tab-dot" />}
+              {!running && transcript.length > 0 && (
+                <span className="tab-count">{transcript.length}</span>
+              )}
+            </button>
           </div>
           <button className="icon-btn" onClick={() => setOpen((v) => !v)} title={open ? "Hide" : "Show"}>
             {open ? "\u2013" : "+"}
           </button>
         </div>
-        {open && (desktop ? <TerminalPane id="main" /> : <TerminalPane id="main" />)}
+        {/* Both panes stay mounted: unmounting the terminal kills its pty, and
+            hiding the agent pane must not drop the transcript. */}
+        <div className="dock-body" hidden={!open || tab !== "terminal"}>
+          <TerminalPane id="main" />
+        </div>
+        {open && tab === "agent" && (
+          <AgentPane transcript={transcript} running={running} onStop={onStop} />
+        )}
       </div>
     </>
   );

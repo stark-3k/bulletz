@@ -745,3 +745,51 @@ button { font: inherit; cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ------------------------ private agent transcript ---------------------- */
+
+.dock-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+/* A `display` rule beats the hidden attribute's UA default, so the inactive
+   tab stayed visible above the active one. The pane must stay MOUNTED (killing
+   the pty is not an option), so hide it explicitly. */
+.dock-body[hidden] { display: none; }
+.tab-dot {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--agent);
+  margin-left: 6px; display: inline-block;
+  box-shadow: 0 0 7px var(--agent); animation: agent-pulse 1.4s ease-in-out infinite;
+}
+.tab-count {
+  margin-left: 6px; font-family: var(--mono); font-size: 9px;
+  background: var(--bg-input); border: 1px solid var(--line);
+  border-radius: 3px; padding: 0 4px; color: var(--fg-dim);
+}
+
+.agent-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.agent-pane-bar {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  padding: 5px 14px; border-bottom: 1px solid var(--line-soft);
+  font-family: var(--mono); font-size: 10.5px; color: var(--fg-dim);
+}
+.agent-pane-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
+.agent-pane-dot.live {
+  background: var(--agent); box-shadow: 0 0 8px var(--agent);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+.agent-pane-note { margin-left: auto; color: var(--fg-faint); }
+.agent-pane-bar .icon-btn { margin-left: 8px; font-size: 9px; }
+.agent-pane-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 14px 12px; }
+
+.agent-text { font-size: 12.5px; white-space: pre-wrap; margin: 6px 0; }
+.agent-tool {
+  display: flex; gap: 8px; align-items: baseline; margin: 3px 0;
+  font-family: var(--mono); font-size: 11px;
+}
+.agent-tool-name { color: var(--accent); flex: none; }
+.agent-tool-args { color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-result { font-family: var(--mono); font-size: 10px; color: var(--decision); margin-left: 2px; }
+.agent-result.bad { color: var(--danger); }
+.agent-err { font-family: var(--mono); font-size: 11px; color: var(--danger); margin: 6px 0; }
+.agent-pane-body .empty code {
+  font-family: var(--mono); background: var(--bg-input);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--fg-dim);
+}

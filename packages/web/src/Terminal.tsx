@@ -16,11 +16,11 @@ type Bridge = {
     onExit: (cb: (id: string, code: number) => void) => () => void;
   };
   agent?: {
-    run: (threadId: string, prompt: string, byOwner: boolean) => Promise<{ ok: boolean; error?: string }>;
-    stop: (threadId: string) => Promise<boolean>;
-    status: (threadId: string) => Promise<{ running: boolean }>;
+    run: (channelId: string, prompt: string, byOwner: boolean) => Promise<{ ok: boolean; error?: string }>;
+    stop: (channelId: string) => Promise<boolean>;
+    status: (channelId: string) => Promise<{ running: boolean }>;
     policy: (patch?: Partial<AgentPolicy>) => Promise<AgentPolicy>;
-    onEvent: (cb: (threadId: string, e: AgentRunEvent) => void) => () => void;
+    onEvent: (cb: (channelId: string, e: AgentRunEvent) => void) => () => void;
   };
 };
 

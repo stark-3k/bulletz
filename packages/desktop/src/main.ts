@@ -28,6 +28,17 @@ function projectEnv(): Record<string, string> {
   return out;
 }
 
+
+/** Environment for anything that runs an AGENT. The MCP server authenticates
+ *  with BULLETZ_TOKEN, so leaving the human's token there makes the agent's own
+ *  post_message land in the channel under a person's name — the exact
+ *  impersonation the actor model exists to prevent. */
+function agentEnv(): Record<string, string> {
+  const env = projectEnv();
+  const agentToken = env["BULLETZ_AGENT_TOKEN"];
+  return agentToken ? { ...env, BULLETZ_TOKEN: agentToken } : env;
+}
+
 const terminals = new Map<string, IPty>();
 
 /* ----------------------------- agent policy ----------------------------- */
@@ -130,7 +141,8 @@ app.whenReady().then(() => {
       cwd: PROJECT_ROOT,
       env: {
         ...(process.env as Record<string, string>),
-        ...projectEnv(),
+        // `claude` started in this pane is an agent too, so it posts as one.
+        ...agentEnv(),
         TERM: "xterm-256color",
         BULLETZ_PROJECT: PROJECT_ROOT,
       },
@@ -169,19 +181,29 @@ app.whenReady().then(() => {
 
   const adapter = new ClaudeCodeAdapter({
     cwd: PROJECT_ROOT,
-    env: projectEnv(),
+    env: agentEnv(),
     mcpConfig: join(PROJECT_ROOT, ".mcp.json"),
     onEvent: (channelId, e: AgentEvent) => {
+      // The transcript is PRIVATE: it goes to this window only. An agent
+      // thinking out loud and calling twelve tools is working, not reporting,
+      // and mirroring all of it into a shared channel buries the room in noise.
+      // The agent decides what teammates see by calling post_message itself.
       if (!win.isDestroyed()) win.webContents.send("agent:event", { channelId, event: e });
-      // Mirror the turn into the shared log. Text becomes a message from the
-      // agent's own identity; tool calls become tool_call events.
-      if (e.type === "text") void postToChannel(channelId, "message", e.text);
-      else if (e.type === "tool") void postToChannel(channelId, "tool_call", e.name, { input: e.input });
-      else if (e.type === "start")
-        void postToChannel(channelId, "agent_turn_start", null, { model: e.model, session: e.sessionId });
-      else if (e.type === "end")
-        void postToChannel(channelId, "agent_turn_end", null, { subtype: e.subtype, cost_usd: e.costUsd, turns: e.turns });
-      else if (e.type === "error") void postToChannel(channelId, "agent_error", e.message);
+
+      // Opt-in escape hatch for anyone who wants the old firehose.
+      if (loadPolicy().postTranscript) {
+        if (e.type === "text") void postToChannel(channelId, "message", e.text);
+        else if (e.type === "tool") void postToChannel(channelId, "tool_call", e.name, { input: e.input });
+        else if (e.type === "end")
+          void postToChannel(channelId, "agent_turn_end", null, {
+            subtype: e.subtype,
+            cost_usd: e.costUsd,
+            turns: e.turns,
+          });
+      }
+      // An error is the one thing worth surfacing regardless: a run that died
+      // silently looks to the room like nobody ever picked the task up.
+      if (e.type === "error") void postToChannel(channelId, "agent_error", e.message);
     },
   });
 
