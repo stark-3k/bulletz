@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Channel } from "@bulletz/shared";
 import { Api, type Constraint, type Presence, type Project } from "./api.ts";
-import { TerminalPane, bridge, type AgentPolicy, type AgentRunEvent } from "./Terminal.tsx";
+import {
+  TerminalPane,
+  bridge,
+  type AgentPolicy,
+  type AgentRunEvent,
+  type AgentSession,
+  type AgentSessionSummary,
+} from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 import { Apps } from "./Apps.tsx";
 
@@ -446,6 +453,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         transcript={(activeId && transcripts[activeId]) || []}
         running={agentBusy && agentRun?.channelId === activeId}
         onStop={() => activeId && void bridge()?.agent?.stop(activeId)}
+        me={me}
       />
     </div>
   );
@@ -458,85 +466,164 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 /** The bottom dock holds what is happening on THIS machine: the terminal, and
  *  the agent's private transcript. Neither is shared — that is the point. */
 
-/** The agent's private transcript. Local to this machine and this window —
- *  nothing here is in the shared log unless the agent chose to post it. */
+/** The agent's private workspace: this run, and every run before it.
+ *
+ *  It lives in the dock rather than the Apps rail on purpose — Apps is shared
+ *  ground, and none of this is. Transcripts never leave the machine and the
+ *  list is scoped to the person who ran them. */
 function AgentPane({
   transcript,
   running,
   onStop,
+  me,
 }: {
   transcript: AgentRunEvent[];
   running: boolean;
   onStop: () => void;
+  me: { id: string; handle: string };
 }) {
+  const [history, setHistory] = useState<AgentSessionSummary[]>([]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [past, setPast] = useState<AgentSession | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const agent = bridge()?.agent;
+
+  const refresh = useCallback(() => {
+    void agent?.sessions(me.id).then(setHistory);
+  }, [agent, me.id]);
+
+  useEffect(refresh, [refresh]);
+  // A finished run becomes history, so reload when the live one stops.
   useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [transcript.length]);
+    if (!running) refresh();
+  }, [running, refresh]);
+
+  // A new live run always takes focus back from whatever was being read.
+  useEffect(() => {
+    if (running) setPicked(null);
+  }, [running]);
+
+  useEffect(() => {
+    if (!picked) return setPast(null);
+    void agent?.session(picked, me.id).then(setPast);
+  }, [picked, agent, me.id]);
+
+  const events: AgentRunEvent[] = picked ? (past?.events ?? []) : transcript;
+  useEffect(() => {
+    if (!picked) end.current?.scrollIntoView({ block: "end" });
+  }, [events.length, picked]);
 
   return (
     <div className="agent-pane">
       <div className="agent-pane-bar">
         <span className={`agent-pane-dot${running ? " live" : ""}`} />
-        <span>{running ? "working locally" : "idle"}</span>
-        <span className="agent-pane-note">private · not in the channel</span>
-        {running && (
+        <span>
+          {picked
+            ? `${past?.status ?? "run"}${past?.costUsd ? ` · $${past.costUsd.toFixed(3)}` : ""}`
+            : running
+              ? "working locally"
+              : "idle"}
+        </span>
+        {picked && past?.sessionId && (
+          <code className="agent-resume" title="Resume this session in the terminal">
+            claude --resume {past.sessionId}
+          </code>
+        )}
+        <span className="agent-pane-note">private · yours · never synced</span>
+        {running && !picked && (
           <button className="icon-btn" onClick={onStop} title="Stop this run">
             ■
           </button>
         )}
       </div>
-      <div className="agent-pane-body">
-        {transcript.length === 0 && (
-          <div className="empty" style={{ padding: "10px 14px" }}>
-            Nothing yet. Start a run with <code>@agent</code> in a channel.
-          </div>
-        )}
-        {transcript.map((e, i) => {
-          if (e.type === "start")
-            return (
-              <div className="turn-rule" key={i}>
-                <span>turn started · {e.model}</span>
-              </div>
-            );
-          if (e.type === "end")
-            return (
-              <div className="turn-rule" key={i}>
-                <span>
-                  {e.subtype}
-                  {e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}
-                  {e.turns ? ` · ${e.turns} turns` : ""}
-                </span>
-              </div>
-            );
-          if (e.type === "tool")
-            return (
-              <div className="agent-tool" key={i}>
-                <span className="agent-tool-name">{e.name}</span>
-                <span className="agent-tool-args">
-                  {JSON.stringify(e.input ?? {}).slice(0, 160)}
-                </span>
-              </div>
-            );
-          if (e.type === "tool_result")
-            return (
-              <div className={`agent-result${e.ok ? "" : " bad"}`} key={i}>
-                {e.ok ? "ok" : "error"}
-              </div>
-            );
-          if (e.type === "error")
-            return (
-              <div className="agent-err" key={i}>
-                {e.message}
-              </div>
-            );
-          return (
-            <div className="agent-text" key={i}>
-              {e.text}
+
+      <div className="agent-split">
+        <div className="agent-history">
+          <button
+            className={`agent-hist-row${picked === null ? " active" : ""}`}
+            onClick={() => setPicked(null)}
+          >
+            <span className="agent-hist-title">{running ? "Live run" : "Current"}</span>
+            <span className="agent-hist-meta">
+              {running ? "running" : `${transcript.length} events`}
+            </span>
+          </button>
+          {history.map((h) => (
+            <button
+              key={h.id}
+              className={`agent-hist-row${picked === h.id ? " active" : ""}`}
+              onClick={() => setPicked(h.id)}
+            >
+              <span className="agent-hist-title">{h.prompt}</span>
+              <span className="agent-hist-meta">
+                <span className={`session-status ${h.status}`}>{h.status}</span>
+                {new Date(h.startedAt).toLocaleString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+                {h.costUsd !== null && ` · $${h.costUsd.toFixed(3)}`}
+              </span>
+            </button>
+          ))}
+          {history.length === 0 && <div className="empty" style={{ padding: "8px 12px" }}>no past runs</div>}
+        </div>
+
+        <div className="agent-pane-body">
+          {events.length === 0 && (
+            <div className="empty" style={{ padding: "10px 14px" }}>
+              {picked ? "Nothing recorded for this run." : (
+                <>
+                  Nothing yet. Start a run with <code>@agent</code> in a channel.
+                </>
+              )}
             </div>
-          );
-        })}
-        <div ref={end} />
+          )}
+          {events.map((e, i) => {
+            if (e.type === "start")
+              return (
+                <div className="turn-rule" key={i}>
+                  <span>turn started · {e.model}</span>
+                </div>
+              );
+            if (e.type === "end")
+              return (
+                <div className="turn-rule" key={i}>
+                  <span>
+                    {e.subtype}
+                    {e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}
+                    {e.turns ? ` · ${e.turns} turns` : ""}
+                  </span>
+                </div>
+              );
+            if (e.type === "tool")
+              return (
+                <div className="agent-tool" key={i}>
+                  <span className="agent-tool-name">{e.name}</span>
+                  <span className="agent-tool-args">{JSON.stringify(e.input ?? {}).slice(0, 160)}</span>
+                </div>
+              );
+            if (e.type === "tool_result")
+              return (
+                <div className={`agent-result${e.ok ? "" : " bad"}`} key={i}>
+                  {e.ok ? "ok" : "error"}
+                </div>
+              );
+            if (e.type === "error")
+              return (
+                <div className="agent-err" key={i}>
+                  {e.message}
+                </div>
+              );
+            return (
+              <div className="agent-text" key={i}>
+                {e.text}
+              </div>
+            );
+          })}
+          <div ref={end} />
+        </div>
       </div>
     </div>
   );
@@ -546,10 +633,12 @@ function TerminalDock({
   transcript,
   running,
   onStop,
+  me,
 }: {
   transcript: AgentRunEvent[];
   running: boolean;
   onStop: () => void;
+  me: { id: string; handle: string };
 }) {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
   const [open, setOpen] = useState(() => localStorage.getItem("bulletz.termOpen") !== "0");
@@ -621,7 +710,7 @@ function TerminalDock({
           <TerminalPane id="main" />
         </div>
         {open && tab === "agent" && (
-          <AgentPane transcript={transcript} running={running} onStop={onStop} />
+          <AgentPane transcript={transcript} running={running} onStop={onStop} me={me} />
         )}
       </div>
     </>

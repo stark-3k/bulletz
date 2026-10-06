@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Task } from "@bulletz/shared";
 import type { Api } from "./api.ts";
 import { Embed } from "./Embed.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
-import { bridge, type AgentSession, type AgentSessionSummary } from "./Terminal.tsx";
 
 /** The apps surface. A widget pinned into a chat message is an attachment;
  *  an app gets the whole canvas. Built-ins live beside agent-published
@@ -17,7 +16,7 @@ const COLUMNS = [
 ] as const;
 
 type AppId =
-  | { type: "builtin"; id: "board" | "registry" | "site" | "sessions" }
+  | { type: "builtin"; id: "board" | "registry" | "site" }
   | { type: "widget"; id: string };
 
 export function Apps({
@@ -74,17 +73,6 @@ export function Apps({
             </span>
           </button>
 
-          <button
-            className={`app-item${isSel({ type: "builtin", id: "sessions" }) ? " active" : ""}`}
-            onClick={() => setSel({ type: "builtin", id: "sessions" })}
-          >
-            <span className="app-glyph">◷</span>
-            <span>
-              Agent sessions
-              <span className="app-sub">local history</span>
-            </span>
-          </button>
-
           <div className="app-group-label">Published apps</div>
           {active.length === 0 && <div className="empty" style={{ padding: "4px 13px" }}>none active</div>}
           {active.map((w) => (
@@ -110,7 +98,6 @@ export function Apps({
         {sel.type === "builtin" && sel.id === "registry" && (
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
-        {sel.type === "builtin" && sel.id === "sessions" && <AgentSessions me={me} />}
         {sel.type === "builtin" && sel.id === "site" && <Embed />}
         {sel.type === "widget" &&
           (() => {
@@ -128,123 +115,6 @@ export function Apps({
   );
 }
 
-
-/** Every agent run this machine has made. Local by construction: a transcript
- *  is private to the machine that produced it, so this reads a file in the
- *  app's own data directory and never the server. */
-function AgentSessions({ me }: { me: { id: string; handle: string } }) {
-  const [rows, setRows] = useState<AgentSessionSummary[]>([]);
-  const [open, setOpen] = useState<AgentSession | null>(null);
-  const api = bridge()?.agent;
-
-  useEffect(() => {
-    if (!api) return;
-    void api.sessions(me.id).then(setRows);
-  }, [api, me.id]);
-
-  if (!api) {
-    return (
-      <div className="empty" style={{ padding: 18 }}>
-        Agent sessions are local to the desktop app.
-      </div>
-    );
-  }
-
-  return (
-    <div className="sessions">
-      <div className="app-head">
-        <span className="app-title">Agent sessions</span>
-        <span className="app-note">
-          {rows.length} run{rows.length === 1 ? "" : "s"} · yours only · local to this machine, never synced
-        </span>
-      </div>
-
-      <div className="sessions-split">
-        <div className="sessions-list">
-          {rows.length === 0 && (
-            <div className="empty" style={{ padding: 14 }}>
-              No runs yet. Start one with <code>@agent</code> in a channel.
-            </div>
-          )}
-          {rows.map((r) => (
-            <button
-              key={r.id}
-              className={`session-row${open?.id === r.id ? " active" : ""}`}
-              onClick={() => void api.session(r.id, me.id).then(setOpen)}
-            >
-              <div className="session-prompt">{r.prompt}</div>
-              <div className="session-meta">
-                <span className={`session-status ${r.status}`}>{r.status}</span>
-                <span>{new Date(r.startedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
-                {r.costUsd !== null && <span>${r.costUsd.toFixed(3)}</span>}
-                {r.turns !== null && <span>{r.turns} turns</span>}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        <div className="session-detail">
-          {!open && <div className="empty" style={{ padding: 16 }}>Select a run.</div>}
-          {open && (
-            <>
-              <div className="session-head">
-                <div className="session-prompt">{open.prompt}</div>
-                {open.sessionId && (
-                  // The bridge back to the real thing: this id resumes the
-                  // agent's own Claude Code session in the terminal.
-                  <div className="session-resume">
-                    <span>resume in terminal</span>
-                    <code>claude --resume {open.sessionId}</code>
-                  </div>
-                )}
-              </div>
-              <div className="session-events">
-                {open.events.map((e, i) => {
-                  if (e.type === "tool")
-                    return (
-                      <div className="agent-tool" key={i}>
-                        <span className="agent-tool-name">{e.name}</span>
-                        <span className="agent-tool-args">
-                          {JSON.stringify(e.input ?? {}).slice(0, 180)}
-                        </span>
-                      </div>
-                    );
-                  if (e.type === "tool_result")
-                    return (
-                      <div className={`agent-result${e.ok ? "" : " bad"}`} key={i}>
-                        {e.ok ? "ok" : "error"}
-                      </div>
-                    );
-                  if (e.type === "error")
-                    return (
-                      <div className="agent-err" key={i}>
-                        {e.message}
-                      </div>
-                    );
-                  if (e.type === "start" || e.type === "end")
-                    return (
-                      <div className="turn-rule" key={i}>
-                        <span>
-                          {e.type === "start"
-                            ? `started · ${e.model}`
-                            : `${e.subtype}${e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}`}
-                        </span>
-                      </div>
-                    );
-                  return (
-                    <div className="agent-text" key={i}>
-                      {e.text}
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function TaskBoard({ api, tasks, onChange }: { api: Api; tasks: Task[]; onChange: () => void }) {
   const [dragId, setDragId] = useState<string | null>(null);

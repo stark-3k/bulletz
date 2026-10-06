@@ -794,7 +794,7 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--fg-dim);
 }
 
-/* --------------------------- agent sessions ---------------------------- */
+/* ------------------- agent history, inside the dock -------------------- */
 
 .sessions { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .sessions-split { display: grid; grid-template-columns: 300px 1fr; min-height: 0; flex: 1; }
@@ -830,3 +830,27 @@ button { font: inherit; cursor: pointer; }
   border-radius: 4px; padding: 2px 6px; color: var(--fg-dim); user-select: all;
 }
 .session-events { padding: 10px 16px 18px; }
+
+/* The dock splits into a run list and the selected transcript. */
+.agent-split { display: grid; grid-template-columns: 230px 1fr; min-height: 0; flex: 1; }
+.agent-history { overflow-y: auto; border-right: 1px solid var(--line); min-height: 0; }
+.agent-hist-row {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  border-left: 2px solid transparent; border-bottom: 1px solid var(--line-soft);
+  padding: 7px 11px; color: var(--fg-dim);
+}
+.agent-hist-row:hover { background: var(--bg-raised); color: var(--fg); }
+.agent-hist-row.active { background: var(--bg-raised); color: var(--fg); border-left-color: var(--agent); }
+.agent-hist-title {
+  display: block; font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-hist-meta {
+  display: flex; gap: 6px; align-items: center; margin-top: 2px;
+  font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint);
+}
+.agent-resume {
+  font-family: var(--mono); font-size: 9.5px; color: var(--fg-dim);
+  background: var(--bg-input); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 6px; user-select: all;
+}
