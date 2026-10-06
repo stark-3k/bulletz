@@ -20,6 +20,16 @@ const time = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export function App() {
+  // Dev-only probe: an error boundary nobody has ever tripped is a liability,
+  // and a boundary can only catch a throw that happens DURING a render — so
+  // this throws from one. window.__bulletzCrash() in the console.
+  const [crash, setCrash] = useState(false);
+  if (import.meta.env.DEV) {
+    (globalThis as unknown as { __bulletzCrash?: () => void }).__bulletzCrash = () =>
+      setCrash(true);
+  }
+  if (crash) throw new Error("simulated render failure (dev crash probe)");
+
   // VITE_BULLETZ_TOKEN is a local-development convenience only: it keeps the
   // dev server from stopping at the login screen. Never ship a build with it.
   const [token, setToken] = useState(
