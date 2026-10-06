@@ -8,7 +8,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { Decision, Event, SearchHit, Task, Channel } from "@bulletz/shared";
+import type { Decision, Event, Note, SearchHit, Task, Channel } from "@bulletz/shared";
 import { z } from "zod";
 import { api, qs } from "./client.js";
 
@@ -574,6 +574,124 @@ server.tool(
       if (!r.root) return text("Thread not found.");
       const line = (e: Event) => `${e.actor_handle}: ${e.body ?? ""}`;
       return text([line(r.root), "--- replies ---", ...r.replies.map(line)].join("\n"));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+/* ---------------------------------- notes --------------------------------- */
+
+/** Notes are the one unit an agent can both write freely and rewrite. A
+ *  decision is a claim, a constraint is a rule, a task is work — a note is the
+ *  working document none of those shapes fit: a runbook, an investigation, the
+ *  state of a migration halfway through. They are included in search_context,
+ *  so what gets written here is what the next agent reads. */
+server.tool(
+  "list_notes",
+  "List the workspace's notes — runbooks, investigations and working documents. Returns ids and a preview; use read_note for the full text.",
+  {
+    include_archived: z.boolean().default(false),
+    labels: z.array(z.string()).optional().describe("Only notes carrying any of these labels"),
+  },
+  async (args) => {
+    try {
+      const r = await api.get<{ notes: Note[] }>(
+        `/notes${qs({
+          include_archived: args.include_archived,
+          ...(args.labels?.length ? { labels: args.labels.join(",") } : {}),
+        })}`,
+      );
+      if (!r.notes.length) return text("No notes yet.");
+      return text(
+        r.notes
+          .map((n) => {
+            const head = `${n.pinned ? "★ " : ""}${n.title || "(untitled)"}${
+              n.status === "archived" ? " [archived]" : ""
+            }`;
+            const preview = n.body.replace(/\s+/g, " ").slice(0, 180);
+            return `${head}\n    id: ${n.id} · ${n.body.length} chars · updated ${n.updated_at}${
+              n.updated_by_handle ? ` by ${n.updated_by_handle}` : ""
+            }\n    ${preview}${n.body.length > 180 ? "…" : ""}`;
+          })
+          .join("\n"),
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "read_note",
+  "Read one note in full.",
+  { note_id: z.string().uuid() },
+  async (args) => {
+    try {
+      // There is no GET /notes/:id — the list endpoint is already indexed on
+      // (workspace, status) and a workspace's notes are tens of rows, not
+      // thousands. Adding a route for one row is not worth the surface.
+      const r = await api.get<{ notes: Note[] }>(`/notes${qs({ include_archived: true })}`);
+      const n = r.notes.find((x) => x.id === args.note_id);
+      if (!n) return text("Note not found.");
+      return text(
+        `# ${n.title || "(untitled)"}${n.status === "archived" ? " [archived]" : ""}\n` +
+          `id: ${n.id} · updated ${n.updated_at}${n.updated_by_handle ? ` by ${n.updated_by_handle}` : ""}\n\n` +
+          n.body,
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "write_note",
+  "Create a note, or overwrite an existing one. Use for anything worth keeping that is not a decision, a constraint or a task: runbooks, investigation write-ups, setup steps. Pass note_id to replace that note's contents — notes are last-write-wins, so read_note first if you mean to append rather than replace.",
+  {
+    note_id: z.string().uuid().optional().describe("Omit to create a new note"),
+    title: z.string().max(300).optional(),
+    body: z.string().max(200_000).optional(),
+    labels: z.array(z.string()).optional(),
+    pinned: z.boolean().optional(),
+    channel_id: z.string().uuid().optional().describe("The conversation this note came out of (new notes only)"),
+  },
+  async (args) => {
+    try {
+      const { note_id, channel_id, ...fields } = args;
+      if (note_id) {
+        if (Object.keys(fields).length === 0) {
+          return fail(new Error("nothing to update — pass at least one of title, body, labels, pinned"));
+        }
+        const r = await api.patch<{ note: Note }>(`/notes/${note_id}`, fields);
+        return text(`Updated note "${r.note.title || "(untitled)"}" (${r.note.id}).`);
+      }
+      const r = await api.post<{ note: Note }>("/notes", {
+        ...fields,
+        ...(channel_id ? { channel_id } : {}),
+      });
+      return text(
+        `Created note "${r.note.title || "(untitled)"}".\nnote id: ${r.note.id}\nIt is live on the Notes app and in search_context immediately — notes need no activation.`,
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.tool(
+  "archive_note",
+  "Archive a note (or restore one). Archived notes drop out of the Notes list and out of search_context; the text is kept.",
+  {
+    note_id: z.string().uuid(),
+    restore: z.boolean().default(false).describe("Set true to bring an archived note back"),
+  },
+  async (args) => {
+    try {
+      const r = await api.patch<{ note: Note }>(`/notes/${args.note_id}`, {
+        status: args.restore ? "active" : "archived",
+      });
+      return text(`Note "${r.note.title || "(untitled)"}" is now ${r.note.status}.`);
     } catch (e) {
       return fail(e);
     }
