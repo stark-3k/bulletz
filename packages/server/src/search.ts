@@ -52,6 +52,11 @@ export async function search(
          -- a tombstoned message must not surface at all
          and not exists (select 1 from events n where n.revision_of = e.id)
          and e.kind <> 'message_deleted'
+         -- archiving a thread must also remove it from what an agent reads,
+         -- or "deleting" it would be cosmetic
+         and not exists (
+           select 1 from threads t where t.id = e.thread_id and t.status = 'archived'
+         )
          and ($3::uuid is null or e.thread_id = $3::uuid)
          and ($4::text[] is null or e.kind = any($4::text[]))
          and ($5::timestamptz is null or e.created_at >= $5::timestamptz)

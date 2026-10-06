@@ -634,3 +634,37 @@ button { font: inherit; cursor: pointer; }
   content: ""; height: 1px; background: var(--line-soft); flex: 1;
 }
 .turn-rule::before { max-width: 14px; }
+
+/* ----------------------------- thread rows ----------------------------- */
+
+.thread-row {
+  display: flex; align-items: stretch;
+  border-left: 2px solid transparent;
+}
+.thread-row:hover { background: var(--bg-raised); }
+.thread-row.active { background: var(--bg-raised); border-left-color: var(--accent); }
+.thread-row.archived { opacity: 0.5; }
+.thread-row .thread { border-left: 0; background: none; flex: 1; min-width: 0; }
+.thread-row:hover .thread, .thread-row.active .thread { background: none; }
+
+.thread-action {
+  display: none; align-items: center; flex: none;
+  background: none; border: 0; color: var(--fg-faint);
+  padding: 0 10px; font-size: 13px; line-height: 1;
+}
+.thread-row:hover .thread-action { display: flex; }
+.thread-action:hover { color: var(--danger); }
+.thread-row.archived .thread-action { display: flex; }
+.thread-row.archived .thread-action:hover { color: var(--decision); }
+
+.thread-confirm { display: flex; align-items: center; gap: 3px; padding: 0 7px 0 0; flex: none; }
+.thread-confirm button {
+  background: none; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--fg-faint); font-size: 10px; padding: 1px 6px;
+}
+.thread-confirm button.danger.solid {
+  background: var(--danger); border-color: var(--danger); color: #1a0d0d; font-weight: 600;
+}
+.thread-confirm button:not(.danger):hover { color: var(--fg); border-color: var(--fg-faint); }
+
+.icon-btn.on { color: var(--accent); border-color: #2b3c58; }

@@ -77,9 +77,40 @@ export async function apiRoutes(app: FastifyInstance) {
 
   /* ------------------------------- threads ------------------------------- */
 
-  app.get("/threads", async (req) => ({
-    threads: await repo.listThreads(req.actor.workspace_id),
-  }));
+  app.get("/threads", async (req) => {
+    const query = z
+      .object({ include_archived: z.coerce.boolean().default(false) })
+      .parse(req.query);
+    return {
+      threads: await repo.listThreads(req.actor.workspace_id, {
+        includeArchived: query.include_archived,
+      }),
+    };
+  });
+
+  /** Archive, not destroy. The thread leaves the sidebar, search and context
+   *  packs; its events stay in the log. Reversible, humans only. */
+  app.patch("/threads/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z.object({ status: z.enum(["open", "archived"]) }).parse(req.body);
+    if (req.actor.kind !== "human") {
+      return reply.code(403).send({ error: "only a human actor can archive a thread" });
+    }
+    const thread = await repo.setThreadStatus(req.actor.workspace_id, id, body.status, req.actor.id);
+    if (!thread) return reply.code(404).send({ error: "thread not found" });
+
+    const event = await repo.appendEvent({
+      workspaceId: req.actor.workspace_id,
+      threadId: thread.id,
+      actorId: req.actor.id,
+      kind: body.status === "archived" ? "thread_archived" : "thread_restored",
+      body: thread.title,
+      payload: { thread_id: thread.id },
+    });
+    broadcast(req.actor.workspace_id, { type: "thread", thread });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { thread };
+  });
 
   app.post("/threads", async (req, reply) => {
     const body = z.object({ title: z.string().min(1).max(200) }).parse(req.body);

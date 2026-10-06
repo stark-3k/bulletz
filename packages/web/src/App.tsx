@@ -98,6 +98,9 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
   const [widgets, setWidgets] = useState<WidgetRow[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
+  const [showArchived, setShowArchived] = useState(
+    () => localStorage.getItem("bulletz.showArchived") === "1",
+  );
   const [agentRun, setAgentRun] = useState<{ threadId: string; status: string } | null>(null);
   const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [surface, setSurface] = useState<"chat" | "apps">(
@@ -310,21 +313,39 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         <div className="pane">
           <div className="pane-head">
             Threads
-            <button className="icon-btn" onClick={newThread} title="New thread">
-              +
-            </button>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+              <button
+                className={`icon-btn${showArchived ? " on" : ""}`}
+                title={showArchived ? "Hide archived" : "Show archived"}
+                onClick={() => {
+                  const next = !showArchived;
+                  setShowArchived(next);
+                  localStorage.setItem("bulletz.showArchived", next ? "1" : "0");
+                  void api.threads(next).then((r) => setThreads(r.threads));
+                }}
+              >
+                ▤
+              </button>
+              <button className="icon-btn" onClick={newThread} title="New thread">
+                +
+              </button>
+            </span>
           </div>
           <div className="pane-body">
             {threads.length === 0 && <div className="empty" style={{ padding: "8px 13px" }}>No threads yet</div>}
             {threads.map((t) => (
-              <button
+              <ThreadRow
                 key={t.id}
-                className={`thread${t.id === activeId ? " active" : ""}`}
-                onClick={() => setActiveId(t.id)}
-              >
-                <div className="thread-title">{t.title}</div>
-                <div className="thread-meta">{time(t.last_event_at)}</div>
-              </button>
+                thread={t}
+                active={t.id === activeId}
+                onOpen={() => setActiveId(t.id)}
+                onArchive={async () => {
+                  await api.setThreadStatus(t.id, t.status === "archived" ? "open" : "archived");
+                  const { threads: next } = await api.threads(showArchived);
+                  setThreads(next);
+                  if (t.id === activeId) setActiveId(next[0]?.id ?? null);
+                }}
+              />
             ))}
           </div>
           <div className="presence">
@@ -693,6 +714,75 @@ function ProjectCard({ project }: { project: Project | null }) {
   );
 }
 
+
+/** A thread row. Archiving is confirmed the same way deleting a message is —
+ *  it removes the thread from the sidebar, from search and from what agents
+ *  read, so it deserves the same deliberate second step even though the
+ *  events survive and it can be undone. */
+function ThreadRow({
+  thread,
+  active,
+  onOpen,
+  onArchive,
+}: {
+  thread: Thread;
+  active: boolean;
+  onOpen: () => void;
+  onArchive: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const archived = thread.status === "archived";
+
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 5000);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setConfirming(false);
+    window.addEventListener("keydown", esc);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [confirming]);
+
+  const act = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onArchive();
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={`thread-row${active ? " active" : ""}${archived ? " archived" : ""}`}>
+      <button className="thread" onClick={onOpen}>
+        <div className="thread-title">{thread.title}</div>
+        <div className="thread-meta">
+          {archived ? "archived" : time(thread.last_event_at)}
+        </div>
+      </button>
+      {confirming ? (
+        <span className="thread-confirm">
+          <button className="danger solid" disabled={busy} onClick={() => void act()}>
+            {busy ? "…" : "Archive"}
+          </button>
+          <button onClick={() => setConfirming(false)}>No</button>
+        </span>
+      ) : (
+        <button
+          className="thread-action"
+          title={archived ? "Restore thread" : "Archive thread"}
+          onClick={() => (archived ? void act() : setConfirming(true))}
+        >
+          {archived ? "↺" : "×"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /** A message, with its own revision controls. Edits and deletes are appended
  *  to the log as new events, so "edited" is a fact about the chain, not a

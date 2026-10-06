@@ -63,6 +63,10 @@ context is a replayable *query* over the log, not a synced copy of it.
   reconstructible. Only the sender may revise their own message. A tombstone
   hides content from every read path but is *not* erasure; real redaction is a
   separate feature.
+- **Threads archive, never delete.** An archived thread leaves the sidebar,
+  search and context packs — so "deleting" it is real as far as agents are
+  concerned — while its events stay in the log and it can be restored. Humans
+  only: workspace-level removal is not an agent's call.
 - **Memory is revocable, not rewritable.** Decisions are superseded, never
   edited; constraints are retired, never deleted. Both stay in the log — the
   record of what was once believed survives, while only what is currently true

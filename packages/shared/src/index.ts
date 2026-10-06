@@ -45,7 +45,7 @@ export const Thread = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
   title: z.string(),
-  status: z.enum(["open", "closed"]),
+  status: z.enum(["open", "closed", "archived"]),
   created_at: z.string(),
   last_event_at: z.string(),
 });

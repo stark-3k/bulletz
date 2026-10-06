@@ -57,8 +57,14 @@ export class Api {
 
   me = () =>
     this.call<{ actor: { id: string; handle: string; kind: string; workspace_id: string } }>("GET", "/me");
-  threads = () => this.call<{ threads: Thread[] }>("GET", "/threads");
+  threads = (includeArchived = false) =>
+    this.call<{ threads: Thread[] }>(
+      "GET",
+      `/threads${includeArchived ? "?include_archived=true" : ""}`,
+    );
   createThread = (title: string) => this.call<{ thread: Thread }>("POST", "/threads", { title });
+  setThreadStatus = (id: string, status: "open" | "archived") =>
+    this.call<{ thread: Thread }>("PATCH", `/threads/${id}`, { status });
   threadEvents = (id: string) =>
     this.call<{ thread: Thread; events: Event[] }>("GET", `/threads/${id}/events?limit=200`);
   postMessage = (threadId: string, body: string) =>

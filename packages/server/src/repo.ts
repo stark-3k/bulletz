@@ -25,12 +25,37 @@ const ROOT_CTE = `
 
 /* -------------------------------- threads -------------------------------- */
 
-export async function listThreads(workspaceId: string, limit = 50): Promise<Thread[]> {
+export async function listThreads(
+  workspaceId: string,
+  opts: { includeArchived?: boolean; limit?: number } = {},
+): Promise<Thread[]> {
   return q<Thread>(
     `select id, workspace_id, title, status, created_at, last_event_at
-       from threads where workspace_id = $1
-      order by last_event_at desc limit $2`,
-    [workspaceId, limit],
+       from threads
+      where workspace_id = $1
+        and ($2::boolean or status <> 'archived')
+      order by last_event_at desc limit $3`,
+    [workspaceId, opts.includeArchived ?? false, opts.limit ?? 50],
+  );
+}
+
+/** Archive is reversible and non-destructive, so any human member may do it.
+ *  Agents may not: workspace-level removal is a human decision, the same rule
+ *  that gates tool activation. */
+export async function setThreadStatus(
+  workspaceId: string,
+  threadId: string,
+  status: "open" | "archived",
+  actorId: string,
+): Promise<Thread | null> {
+  return maybeOne<Thread>(
+    `update threads
+        set status = $3,
+            archived_at = case when $3 = 'archived' then now() else null end,
+            archived_by = case when $3 = 'archived' then $4::uuid else null end
+      where workspace_id = $1 and id = $2
+      returning id, workspace_id, title, status, created_at, last_event_at`,
+    [workspaceId, threadId, status, actorId],
   );
 }
 
