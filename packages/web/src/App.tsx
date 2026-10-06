@@ -11,6 +11,8 @@ import {
 } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 import { Apps } from "./Apps.tsx";
+import { useVoice } from "./Voice.tsx";
+import { VoiceBar } from "./VoiceBar.tsx";
 
 const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
@@ -117,6 +119,8 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
   );
   const [connected, setConnected] = useState(false);
+  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const [peerId, setPeerId] = useState<string | null>(null);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
@@ -158,7 +162,9 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       (raw) => {
         const m = raw as Record<string, never>;
         const type = m["type"] as unknown as string;
-        if (type === "event") {
+        if (type === "hello") {
+          setPeerId((m["peer_id"] as unknown as string) ?? null);
+        } else if (type === "event") {
           const ev = m["event"] as unknown as Event;
           if (ev.channel_id && ev.channel_id === activeRef.current) {
             setEvents((prev) => {
@@ -191,7 +197,11 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       () => setConnected(true),
       () => setConnected(false),
     );
-    return () => ws.close();
+    setSocket(ws);
+    return () => {
+      setSocket(null);
+      ws.close();
+    };
   }, [api, refreshMemory]);
 
   // Live status of a chat-triggered agent turn. The transcript itself arrives
@@ -227,6 +237,8 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       off();
     };
   }, []);
+
+  const voice = useVoice(socket, peerId);
 
   const active = channels.find((t) => t.id === activeId) ?? null;
 
@@ -385,6 +397,17 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 
         <div className="pane">
           <div className="pane-head">{active?.title ?? "No channel"}</div>
+          {activeId && (
+            <VoiceBar
+              state={voice.state}
+              inChannel={activeId}
+              onJoin={() => void voice.join(activeId)}
+              onLeave={voice.leave}
+              onMute={voice.setMuted}
+              onShare={() => void voice.startShare()}
+              onStopShare={() => void voice.stopShare()}
+            />
+          )}
           <div className="pane-body">
             <Stream
               events={events}

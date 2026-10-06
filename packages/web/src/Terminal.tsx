@@ -33,6 +33,15 @@ type Bridge = {
     sessions: (actorId: string) => Promise<AgentSessionSummary[]>;
     session: (id: string, actorId: string) => Promise<AgentSession | null>;
   };
+  screen?: {
+    sources: () => Promise<{
+      sources?: { id: string; name: string; thumbnail: string; isScreen: boolean }[];
+      error?: string;
+      status?: string;
+    }>;
+    pick: (id: string) => Promise<boolean>;
+    openSettings: () => Promise<boolean>;
+  };
 };
 
 /** Owned by the machine, not the server: a teammate's message starting a shell

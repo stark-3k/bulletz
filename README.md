@@ -65,6 +65,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   app's own data directory, never the server — that file also carries each
   channel's Claude Code session id, so a channel keeps one continuous
   conversation across app restarts instead of meeting a stranger.
+- **Voice is a mesh, and that is a decision with a ceiling.** Every
+  participant connects directly to every other and the server only forwards
+  SDP/ICE — it never touches media. Connection count grows with the square of
+  the room, so past roughly five people this needs an SFU, which is a real
+  server component. There is also no TURN relay: the ~10-20% of networks behind
+  symmetric NAT will fail to connect until one is paid for.
 - **Channels are rooms; threads are branches.** A channel is a durable room.
   A thread hangs off one message inside it (`events.reply_to`), one level deep,
   and the channel shows top-level messages only — so a long exchange lives in
@@ -126,6 +132,8 @@ context is a replayable *query* over the log, not a synced copy of it.
 | MCP bridge — 12 tools, any MCP client | ✅ working |
 | Desktop app (Electron: chat + real pty terminal) | ✅ working |
 | Agent adapter — a chat message starts a Claude Code turn | ✅ working |
+| Voice channels (WebRTC mesh) | ✅ working |
+| Screen sharing | ⚠️ built; needs macOS Screen Recording permission |
 | Server-side tool registry + embedded live views | ✅ working |
 | Apps surface (task board, registry, full-size widgets) | ✅ working |
 | Rollups + extraction + pgvector hybrid | ⬜ designed |

@@ -1,5 +1,5 @@
 import { spawn as spawnPty, type IPty } from "node-pty";
-import { BrowserWindow, app, ipcMain, shell } from "electron";
+import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell, systemPreferences } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -48,6 +48,9 @@ function agentEnv(): Record<string, string> {
  *  blank screen and a dead job. */
 type Terminal = { pty: IPty; buffer: string[]; bytes: number };
 const terminals = new Map<string, Terminal>();
+
+/** The source the user picked, consumed by the next getDisplayMedia call. */
+let pendingShareSource: string | null = null;
 
 const MAX_BUFFER_BYTES = 256 * 1024;
 
@@ -144,6 +147,24 @@ sandbox: false,
 }
 
 app.whenReady().then(() => {
+  // Screen sharing: getDisplayMedia() has no picker in Electron, so the app
+  // supplies the source. We hand the renderer the list and let the person
+  // choose, rather than silently granting the whole screen.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      void desktopCapturer.getSources({ types: ["screen", "window"] }).then((sources) => {
+        const chosen = pendingShareSource
+          ? sources.find((s) => s.id === pendingShareSource)
+          : sources[0];
+        pendingShareSource = null;
+        // audio:'loopback' would capture system sound; left off so a share
+        // never picks up the call itself and echoes.
+        callback(chosen ? { video: chosen } : {});
+      });
+    },
+    { useSystemPicker: false },
+  );
+
   const win = createWindow();
 
   const sessions = new SessionStore(join(app.getPath("userData"), "agent-sessions.jsonl"));
@@ -333,6 +354,48 @@ app.whenReady().then(() => {
 
   // Scoped by the caller's actor: signing in as someone else must not expose
   // the previous person's transcripts.
+  ipcMain.handle("screen:sources", async () => {
+    // macOS gates screen capture behind a per-app permission that cannot be
+    // requested from code — the user has to grant it in System Settings and
+    // relaunch. Without this check desktopCapturer just throws "Failed to get
+    // sources", which tells nobody anything.
+    if (process.platform === "darwin") {
+      const status = systemPreferences.getMediaAccessStatus("screen");
+      if (status !== "granted") {
+        return { error: "permission", status };
+      }
+    }
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen", "window"],
+        thumbnailSize: { width: 320, height: 180 },
+      });
+      return {
+        sources: sources.map((s) => ({
+          id: s.id,
+          name: s.name,
+          thumbnail: s.thumbnail.toDataURL(),
+          isScreen: s.id.startsWith("screen:"),
+        })),
+      };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  });
+
+  /** Opens the exact pane the permission lives in. */
+  ipcMain.handle("screen:openSettings", () => {
+    void shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    );
+    return true;
+  });
+
+  ipcMain.handle("screen:pick", (_e, { id }: { id: string }) => {
+    pendingShareSource = id;
+    return true;
+  });
+
   ipcMain.handle("agent:sessions", (_e, { actorId }: { actorId?: string } = {}) =>
     sessions.list(actorId ?? null),
   );

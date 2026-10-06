@@ -43,6 +43,16 @@ contextBridge.exposeInMainWorld("bulletz", {
       return () => ipcRenderer.removeListener("agent:event", h);
     },
   },
+  screen: {
+    sources: () =>
+      ipcRenderer.invoke("screen:sources") as Promise<{
+        sources?: { id: string; name: string; thumbnail: string; isScreen: boolean }[];
+        error?: string;
+        status?: string;
+      }>,
+    openSettings: () => ipcRenderer.invoke("screen:openSettings") as Promise<boolean>,
+    pick: (id: string) => ipcRenderer.invoke("screen:pick", { id }) as Promise<boolean>,
+  },
   localStatus: () =>
     ipcRenderer.invoke("local:status") as Promise<{
       branch: string | null;

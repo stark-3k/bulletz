@@ -13,6 +13,7 @@ import { maybeOne, q } from "../db.js";
 import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
 import { contextPack, renderContextPack, search } from "../search.js";
+import * as voice from "../voice.js";
 
 export async function apiRoutes(app: FastifyInstance) {
   // Every route below is authenticated as an actor; the log always knows who.
@@ -477,6 +478,10 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     return { ok: true };
   });
+
+  app.get("/voice", async (req) => ({
+    rooms: voice.channelsWithVoice(req.actor.workspace_id),
+  }));
 
   app.get("/presence", async (req) => ({
     presence: await q(

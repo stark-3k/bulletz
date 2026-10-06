@@ -2,10 +2,12 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { WebSocketServer } from "ws";
 import { ZodError } from "zod";
+import { randomUUID } from "node:crypto";
 import { actorForToken } from "./auth.js";
 import { pool } from "./db.js";
 import { env } from "./env.js";
 import { addConn, connectionCount } from "./realtime.js";
+import * as voice from "./voice.js";
 import { apiRoutes } from "./routes/api.js";
 import { widgetRoutes } from "./routes/widgets.js";
 
@@ -54,12 +56,47 @@ app.server.on("upgrade", async (req, socket, head) => {
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      // hello first: a client must learn who it is before it sees any fanout,
-      // and addConn broadcasts this actor's presence immediately.
-      ws.send(JSON.stringify({ type: "hello", workspace_id: actor.workspace_id, actor }));
+      // One peer id per CONNECTION, not per actor: the same person in two
+      // windows is two peers and must negotiate separately.
+      const peerId = randomUUID();
+      ws.send(JSON.stringify({ type: "hello", workspace_id: actor.workspace_id, actor, peer_id: peerId }));
       const remove = addConn({ ws, workspaceId: actor.workspace_id, actorHandle: actor.handle });
-      ws.on("close", remove);
-      ws.on("error", remove);
+
+      ws.on("message", (raw) => {
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(String(raw)) as Record<string, unknown>;
+        } catch {
+          return; // a client that sends junk is ignored, not disconnected
+        }
+        const type = msg["type"];
+        if (type === "voice:join" && typeof msg["channel_id"] === "string") {
+          voice.join({
+            ws,
+            workspaceId: actor.workspace_id,
+            channelId: msg["channel_id"],
+            actorId: actor.id,
+            handle: actor.handle,
+            peerId,
+          });
+        } else if (type === "voice:leave") {
+          voice.leave(peerId);
+        } else if (type === "voice:state") {
+          voice.setState(peerId, {
+            muted: msg["muted"] as boolean | undefined,
+            sharing: msg["sharing"] as boolean | undefined,
+          });
+        } else if (type === "voice:signal" && typeof msg["to"] === "string") {
+          voice.relay(peerId, msg["to"], msg["data"]);
+        }
+      });
+
+      const cleanup = () => {
+        voice.leave(peerId);
+        remove();
+      };
+      ws.on("close", cleanup);
+      ws.on("error", cleanup);
     });
   } catch (err) {
     app.log.error({ err }, "ws upgrade failed");
