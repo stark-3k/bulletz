@@ -42,15 +42,23 @@ export type Policy = {
   allowedTools: string[];
 };
 
-/** Workspace memory plus read-only code access. Deliberately excludes Bash,
- *  Write and Edit: a chat message should not mutate the checkout until the
- *  machine's owner widens this. */
+/** What an owner-triggered run may do. This matches what the same person gets
+ *  by typing in the terminal — asking an agent to build something and denying
+ *  it Write is a trap: with `--permission-prompts none` there is no approval
+ *  surface, so the denial is silent until it tries. */
 export const DEFAULT_ALLOWED_TOOLS = [
   "mcp__bulletz",
   "Read",
   "Glob",
   "Grep",
+  "Write",
+  "Edit",
+  "Bash",
 ];
+
+/** What a run triggered by anyone else may do. Read-only, and paired with
+ *  --restricted so the code-running tools are gone entirely. */
+export const RESTRICTED_ALLOWED_TOOLS = ["mcp__bulletz", "Read", "Glob", "Grep"];
 
 export const DEFAULT_POLICY: Policy = {
   enabled: false,
@@ -100,6 +108,10 @@ export class ClaudeCodeAdapter {
     const prior = this.sessions.get(threadId);
     const sessionId = prior ?? randomUUID();
 
+    const grants = trusted
+      ? (policy.allowedTools ?? DEFAULT_ALLOWED_TOOLS)
+      : RESTRICTED_ALLOWED_TOOLS;
+
     const args = [
       "-p",
       "--output-format", "stream-json",
@@ -108,13 +120,24 @@ export class ClaudeCodeAdapter {
       "--strict-mcp-config",
       "--max-budget-usd", String(policy.maxBudgetUsd),
       "--permission-prompts", "none",
-      "--allowed-tools", ...(policy.allowedTools ?? DEFAULT_ALLOWED_TOOLS),
+      "--allowed-tools", ...grants,
       ...(prior ? ["--resume", prior] : ["--session-id", sessionId]),
       // An untrusted trigger gets no shell and no code execution.
       ...(trusted ? [] : ["--restricted"]),
       "--append-system-prompt",
-      "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work. " +
+      [
+        "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work.",
         "Your reply is posted into a shared team thread, so write for teammates who did not see the task.",
+        // Stating the grants up front matters: there is no approval surface in
+        // this session, so an ungranted tool fails silently when tried. Without
+        // this an agent plans an implementation it cannot apply, and only finds
+        // out several turns and several dollars in.
+        `Tools granted this run: ${grants.join(", ")}. Anything outside that list is denied`,
+        "automatically with no way to approve it, so do not plan work that depends on it —",
+        trusted
+          ? "say what you need and why instead."
+          : "this run is read-only: report findings and proposed changes rather than making them.",
+      ].join(" "),
       prompt,
     ];
 
