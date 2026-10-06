@@ -136,6 +136,15 @@ sandbox: false,
   if (DEV_URL) void win.loadURL(DEV_URL);
   else void win.loadFile(join(PROJECT_ROOT, "packages", "web", "dist", "index.html"));
 
+  // macOS hides the traffic lights in fullscreen, so the space the title bar
+  // reserves for them becomes dead space. Tell the renderer which it is.
+  const sendFullscreen = () => {
+    if (!win.isDestroyed()) win.webContents.send("window:fullscreen", win.isFullScreen());
+  };
+  win.on("enter-full-screen", sendFullscreen);
+  win.on("leave-full-screen", sendFullscreen);
+  win.webContents.on("did-finish-load", sendFullscreen);
+
   win.on("closed", () => {
     for (const [id, t] of terminals) {
       t.pty.kill();

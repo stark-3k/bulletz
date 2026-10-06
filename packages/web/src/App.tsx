@@ -387,6 +387,15 @@ function Workspace({
   // Live status of a chat-triggered agent turn. The transcript itself arrives
   // as ordinary events over the WebSocket, because the adapter posts it into
   // the channel — so teammates see the work, not just the person who asked.
+  // In fullscreen there are no traffic lights to avoid, so the title bar
+  // reclaims the space it reserves for them.
+  useEffect(() => {
+    const off = bridge()?.onFullscreen?.((full) => {
+      document.documentElement.classList.toggle("is-fullscreen", full);
+    });
+    return off;
+  }, []);
+
   useEffect(() => {
     const b = bridge();
     if (!b?.agent) return;

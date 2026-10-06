@@ -70,7 +70,8 @@ button { font: inherit; cursor: pointer; }
 .titlebar {
   display: flex; align-items: center; gap: 12px;
   /* hiddenInset draws the traffic lights OVER the top-left of the web content,
-     so the first 78px belong to macOS, not to us. */
+     so the first 78px belong to macOS, not to us — except in fullscreen, where
+     the lights are hidden and that reservation is just a hole. */
   padding: 0 14px 0 78px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-raised);
@@ -1159,3 +1160,7 @@ button { font: inherit; cursor: pointer; }
   .term-panel { max-height: 38vh; }
   .onboard { max-height: 34vh; }
 }
+
+
+/* Fullscreen hides the traffic lights, so the title bar takes the space back. */
+:root.is-fullscreen .titlebar { padding-left: 14px; }

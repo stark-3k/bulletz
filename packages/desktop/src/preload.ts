@@ -53,6 +53,11 @@ contextBridge.exposeInMainWorld("bulletz", {
     openSettings: () => ipcRenderer.invoke("screen:openSettings") as Promise<boolean>,
     pick: (id: string) => ipcRenderer.invoke("screen:pick", { id }) as Promise<boolean>,
   },
+  onFullscreen: (cb: (full: boolean) => void) => {
+    const h = (_e: unknown, full: boolean) => cb(full);
+    ipcRenderer.on("window:fullscreen", h);
+    return () => ipcRenderer.removeListener("window:fullscreen", h);
+  },
   localStatus: () =>
     ipcRenderer.invoke("local:status") as Promise<{
       branch: string | null;

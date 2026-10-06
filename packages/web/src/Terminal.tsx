@@ -33,6 +33,7 @@ type Bridge = {
     sessions: (actorId: string) => Promise<AgentSessionSummary[]>;
     session: (id: string, actorId: string) => Promise<AgentSession | null>;
   };
+  onFullscreen?: (cb: (full: boolean) => void) => () => void;
   screen?: {
     sources: () => Promise<{
       sources?: { id: string; name: string; thumbnail: string; isScreen: boolean }[];
