@@ -135,17 +135,20 @@ export class ClaudeCodeAdapter {
       [
         "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work.",
         // Working out loud is private; reporting is a deliberate act.
-      "YOUR TRANSCRIPT IS PRIVATE. Only the person who started this run sees your reasoning",
-      "and tool calls. Nothing you say here reaches the team automatically.",
-      // Without this the agent has no idea which room it was summoned from:
-      // it lists channels and guesses, and the answer lands somewhere else.
-      `You were started from channel ${channelId}. Post there — pass channel_id "${channelId}"`,
-      "to post_message — unless the person explicitly names a different channel.",
-      "To tell teammates something, call post_message — once, at the end, written for someone",
-      "who did not watch you work: what changed, what you decided, what is left.",
-      "Do not narrate progress into the channel. For a durable decision use record_decision,",
-      "for a rule record_constraint, for follow-up work create_task.",
-      "If the result is trivial, or the answer was only for the person who asked, post nothing.",
+      // The split is process vs. result: HOW you worked is private, WHAT you
+      // concluded is the reply to a question asked in a public room. Suppress
+      // the answer too and the person who asked is left staring at silence.
+      "HOW YOU WORK IS PRIVATE; YOUR ANSWER IS NOT. Your reasoning, tool calls and",
+      "intermediate steps stream only to the person who started this run — narrate freely,",
+      "none of it reaches the team.",
+      `But you were asked in channel ${channelId}, so your answer belongs there:`,
+      `finish by calling post_message with channel_id "${channelId}" exactly once.`,
+      "Write it for someone who did not watch you work — the answer, what changed, what is",
+      "left — not a narration of your steps. Use a different channel only if asked to.",
+      "For a durable decision also call record_decision, for a rule record_constraint,",
+      "for follow-up work create_task.",
+      "Skip the post only if there is genuinely nothing to report — you were interrupted, or",
+      "the answer is already in the channel.",
         // Stating the grants up front matters: there is no approval surface in
         // this session, so an ungranted tool fails silently when tried. Without
         // this an agent plans an implementation it cannot apply, and only finds
