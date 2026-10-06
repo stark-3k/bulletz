@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@bulletz/shared";
-import type { Api } from "./api.ts";
+import type { Api, Invite, Member } from "./api.ts";
 import { Embed } from "./Embed.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 
@@ -16,7 +16,7 @@ const COLUMNS = [
 ] as const;
 
 type AppId =
-  | { type: "builtin"; id: "board" | "registry" | "site" }
+  | { type: "builtin"; id: "board" | "registry" | "site" | "members" }
   | { type: "widget"; id: string };
 
 export function Apps({
@@ -29,7 +29,7 @@ export function Apps({
   api: Api;
   tasks: Task[];
   widgets: WidgetRow[];
-  me: { id: string; handle: string };
+  me: { id: string; handle: string; role: string };
   onChange: () => void;
 }) {
   const [sel, setSel] = useState<AppId>({ type: "builtin", id: "board" });
@@ -73,6 +73,17 @@ export function Apps({
             </span>
           </button>
 
+          <button
+            className={`app-item${isSel({ type: "builtin", id: "members" }) ? " active" : ""}`}
+            onClick={() => setSel({ type: "builtin", id: "members" })}
+          >
+            <span className="app-glyph">◎</span>
+            <span>
+              Members
+              <span className="app-sub">people &amp; access</span>
+            </span>
+          </button>
+
           <div className="app-group-label">Published apps</div>
           {active.length === 0 && <div className="empty" style={{ padding: "4px 13px" }}>none active</div>}
           {active.map((w) => (
@@ -99,6 +110,7 @@ export function Apps({
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
         {sel.type === "builtin" && sel.id === "site" && <Embed />}
+        {sel.type === "builtin" && sel.id === "members" && <Members api={api} me={me} />}
         {sel.type === "widget" &&
           (() => {
             const w = widgets.find((x) => x.id === sel.id);
@@ -115,6 +127,149 @@ export function Apps({
   );
 }
 
+
+
+/** People and access. Role changes and disabling take effect immediately —
+ *  disabling someone ends their sessions and disables the agents that act for
+ *  them, which is the whole point of having this screen. */
+function Members({ api, me }: { api: Api; me: { id: string; handle: string; role: string } }) {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [invites, setInvites] = useState<Invite[]>([]);
+  const [fresh, setFresh] = useState<{ code: string; role: string } | null>(null);
+  const [role, setRole] = useState("member");
+  const [err, setErr] = useState("");
+  const admin = me.role === "owner" || me.role === "admin";
+
+  const load = useCallback(async () => {
+    const m = await api.members();
+    setMembers(m.members);
+    if (admin) {
+      try {
+        setInvites((await api.invites()).invites);
+      } catch {
+        /* a race with losing admin is not worth surfacing */
+      }
+    }
+  }, [api, admin]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setErr("");
+    try {
+      await fn();
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="members">
+      <div className="app-head">
+        <span className="app-title">Members</span>
+        <span className="app-note">{members.length} actors · roles take effect immediately</span>
+      </div>
+
+      {err && <div className="members-err">{err}</div>}
+
+      {admin && (
+        <div className="invite-row">
+          <select value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="admin">admin</option>
+            <option value="member">member</option>
+            <option value="guest">guest (read-only)</option>
+          </select>
+          <button
+            className="send"
+            onClick={() =>
+              void act(async () => {
+                const inv = await api.createInvite(role);
+                setFresh({ code: inv.code, role: inv.role });
+              })
+            }
+          >
+            Create invite
+          </button>
+          {fresh && (
+            <span className="invite-code">
+              {/* Shown once: the server stores only a hash. */}
+              <code>{fresh.code}</code>
+              <button
+                className="voice-ctl"
+                onClick={() => void navigator.clipboard?.writeText(fresh.code)}
+              >
+                Copy
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="members-list">
+        {members.map((m) => (
+          <div className={`member-row${m.status === "disabled" ? " off" : ""}`} key={m.id}>
+            <span className={`member-kind ${m.kind}`}>{m.kind}</span>
+            <span className="member-handle">
+              {m.handle}
+              {m.id === me.id && <span className="member-you">you</span>}
+            </span>
+            <span className="member-meta">
+              {m.active_sessions > 0 && `${m.active_sessions} session${m.active_sessions === 1 ? "" : "s"}`}
+            </span>
+            {admin && m.kind === "human" ? (
+              <select
+                className="member-role"
+                value={m.role}
+                onChange={(e) => void act(() => api.updateMember(m.id, { role: e.target.value }))}
+              >
+                {["owner", "admin", "member", "guest"].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="member-role-static">{m.role}</span>
+            )}
+            {admin && m.id !== me.id && (
+              <button
+                className={`voice-ctl${m.status === "disabled" ? "" : " leave"}`}
+                onClick={() =>
+                  void act(() =>
+                    api.updateMember(m.id, { status: m.status === "disabled" ? "active" : "disabled" }),
+                  )
+                }
+              >
+                {m.status === "disabled" ? "Enable" : "Disable"}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {admin && invites.filter((i) => !i.accepted_at).length > 0 && (
+        <div className="members-list">
+          <div className="app-group-label">Pending invites</div>
+          {invites
+            .filter((i) => !i.accepted_at)
+            .map((i) => (
+              <div className="member-row" key={i.id}>
+                <span className="member-kind">invite</span>
+                <span className="member-handle">{i.role}</span>
+                <span className="member-meta">expires {new Date(i.expires_at).toLocaleDateString()}</span>
+                <button className="voice-ctl leave" onClick={() => void act(() => api.revokeInvite(i.id))}>
+                  Revoke
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TaskBoard({ api, tasks, onChange }: { api: Api; tasks: Task[]; onChange: () => void }) {
   const [dragId, setDragId] = useState<string | null>(null);

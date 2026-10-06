@@ -26,6 +26,29 @@ export type Project = {
   links: ProjectLink[];
 };
 
+export type Member = {
+  id: string;
+  handle: string;
+  display_name: string;
+  email: string | null;
+  kind: "human" | "agent" | "integration";
+  role: "owner" | "admin" | "member" | "guest";
+  status: "active" | "disabled";
+  owner_actor_id: string | null;
+  active_sessions: number;
+  created_at: string;
+};
+
+export type Invite = {
+  id: string;
+  role: string;
+  note: string | null;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  accepted_by_handle: string | null;
+};
+
 export type Presence = {
   handle: string;
   kind: string;
@@ -37,6 +60,32 @@ export type Presence = {
   agent_kind: string | null;
   online: boolean;
 };
+
+/** Unauthenticated calls: sign-in happens before there is an Api instance. */
+export const auth = {
+  login: (handle: string, password: string) => post("/auth/login", { handle, password }),
+  accept: (body: { code: string; handle: string; password: string; display_name?: string; email?: string }) =>
+    post("/auth/accept", body),
+};
+
+async function post(path: string, body: unknown): Promise<{ token: string; expires_at: string }> {
+  const res = await fetch(`${BASE}/v1${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let message = text.slice(0, 200);
+    try {
+      message = (JSON.parse(text) as { error?: string }).error ?? message;
+    } catch {
+      /* not json */
+    }
+    throw new Error(message);
+  }
+  return JSON.parse(text) as { token: string; expires_at: string };
+}
 
 export class Api {
   constructor(private token: string) {}
@@ -63,8 +112,28 @@ export class Api {
     return text ? (JSON.parse(text) as T) : ({} as T);
   }
 
+  logout = () => this.call("POST", "/auth/logout", {});
+  members = () => this.call<{ members: Member[] }>("GET", "/members");
+  invites = () => this.call<{ invites: Invite[] }>("GET", "/invites");
+  createInvite = (role: string, note?: string) =>
+    this.call<{ id: string; code: string; role: string; expires_at: string }>("POST", "/invites", {
+      role,
+      ...(note ? { note } : {}),
+    });
+  revokeInvite = (id: string) => this.call("DELETE", `/invites/${id}`);
+  updateMember = (id: string, patch: { role?: string; status?: string }) =>
+    this.call<{ member: Member }>("PATCH", `/members/${id}`, patch);
+
   me = () =>
-    this.call<{ actor: { id: string; handle: string; kind: string; workspace_id: string } }>("GET", "/me");
+    this.call<{
+      actor: {
+        id: string;
+        handle: string;
+        kind: string;
+        workspace_id: string;
+        role: Member["role"];
+      };
+    }>("GET", "/me");
   channels = (includeArchived = false) =>
     this.call<{ channels: Channel[] }>(
       "GET",

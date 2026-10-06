@@ -8,7 +8,7 @@ import {
 } from "@bulletz/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { requireActor } from "../authHook.js";
+import { allow, requireActor } from "../authHook.js";
 import { maybeOne, q } from "../db.js";
 import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
@@ -41,6 +41,7 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   app.post("/project/links", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const body = z
       .object({
         kind: z.enum(["repo", "site", "staging", "docs", "dashboard", "tracker", "design", "api", "chat", "other"]),
@@ -95,6 +96,9 @@ export async function apiRoutes(app: FastifyInstance) {
   app.patch("/channels/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ status: z.enum(["open", "archived"]) }).parse(req.body);
+    // Archiving is reversible, so any member may do it — but not a guest, and
+    // still not an agent: removing a shared surface is a person's call.
+    if (!allow(req, reply, "write")) return reply;
     if (req.actor.kind !== "human") {
       return reply.code(403).send({ error: "only a human actor can archive a channel" });
     }
@@ -115,6 +119,7 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   app.post("/channels", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const body = z.object({ title: z.string().min(1).max(200) }).parse(req.body);
     const channel = await repo.createChannel(req.actor.workspace_id, body.title, req.actor.id);
     broadcast(req.actor.workspace_id, { type: "channel", channel });
@@ -153,6 +158,7 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   app.post("/events", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = PostEventInput.parse(req.body);
 
     let channelId = input.channel_id ?? null;
@@ -272,6 +278,7 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   app.post("/decisions", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = CreateDecisionInput.parse(req.body);
     const decision = await repo.createDecision({
       workspaceId: req.actor.workspace_id,
@@ -310,6 +317,7 @@ export async function apiRoutes(app: FastifyInstance) {
   }));
 
   app.post("/constraints", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = CreateConstraintInput.parse(req.body);
     const constraint = await repo.createConstraint({
       workspaceId: req.actor.workspace_id,
@@ -367,6 +375,7 @@ export async function apiRoutes(app: FastifyInstance) {
   });
 
   app.post("/tasks", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = CreateTaskInput.parse(req.body);
     const assignee = input.assignee_handle
       ? await maybeOne<{ id: string }>(

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { maybeOne, one, q } from "../db.js";
 import { appendEvent } from "../repo.js";
 import { broadcast } from "../realtime.js";
-import { requireActor } from "../authHook.js";
+import { allow, requireActor } from "../authHook.js";
 import { ToolError, getTool, invokeTool } from "../tools.js";
 
 const ToolInput = z.object({
@@ -62,6 +62,7 @@ export async function widgetRoutes(app: FastifyInstance) {
   }));
 
   app.post("/tools", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = ToolInput.parse(req.body);
     if (input.impl.kind === "http" && input.egress_allow.length === 0) {
       return reply.code(400).send({ error: "http tools must declare egress_allow" });
@@ -99,11 +100,9 @@ export async function widgetRoutes(app: FastifyInstance) {
   // The activation gate. Agents draft; only humans activate.
   app.post("/tools/:id/activate", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    if (req.actor.kind !== "human") {
-      return reply
-        .code(403)
-        .send({ error: "only a human actor can activate a tool" });
-    }
+    // Activating a tool widens what every agent in the workspace can do, so it
+    // is an admin decision rather than merely a human one.
+    if (!allow(req, reply, "activate")) return reply;
     const tool = await maybeOne(
       `update tools set status = 'active', activated_by = $3, activated_at = now()
         where workspace_id = $1 and id = $2 returning id, name, status`,
@@ -128,9 +127,7 @@ export async function widgetRoutes(app: FastifyInstance) {
    *  that gates activation. */
   app.delete("/tools/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    if (req.actor.kind !== "human") {
-      return reply.code(403).send({ error: "only a human actor can delete a tool" });
-    }
+    if (!allow(req, reply, "activate")) return reply;
     const used = await q<{ name: string }>(
       `select name from widgets where workspace_id = $1 and tool_id = $2`,
       [req.actor.workspace_id, id],
@@ -186,6 +183,7 @@ export async function widgetRoutes(app: FastifyInstance) {
   }));
 
   app.post("/widgets", async (req, reply) => {
+    if (!allow(req, reply, "write")) return reply;
     const input = WidgetInput.parse(req.body);
     if (input.kind === "view" && !input.view) {
       return reply.code(400).send({ error: "view widgets require a view spec" });
@@ -232,9 +230,7 @@ export async function widgetRoutes(app: FastifyInstance) {
 
   app.post("/widgets/:id/activate", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    if (req.actor.kind !== "human") {
-      return reply.code(403).send({ error: "only a human actor can activate a widget" });
-    }
+    if (!allow(req, reply, "activate")) return reply;
     const widget = await maybeOne(
       `update widgets set status = 'active' where workspace_id = $1 and id = $2
        returning id, name, status`,

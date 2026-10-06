@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Task, Channel } from "@bulletz/shared";
-import { Api, type Constraint, type Presence, type Project } from "./api.ts";
+import { Api, auth, type Constraint, type Presence, type Project } from "./api.ts";
 import {
   TerminalPane,
   bridge,
@@ -35,7 +35,7 @@ export function App() {
   const [token, setToken] = useState(
     () => localStorage.getItem(TOKEN_KEY) ?? import.meta.env.VITE_BULLETZ_TOKEN ?? "",
   );
-  const [me, setMe] = useState<{ id: string; handle: string; kind: string } | null>(null);
+  const [me, setMe] = useState<{ id: string; handle: string; kind: string; role: string } | null>(null);
   const [authErr, setAuthErr] = useState("");
 
   const api = useMemo(() => (token ? new Api(token) : null), [token]);
@@ -73,40 +73,125 @@ export function App() {
   return <Workspace api={api} me={me} />;
 }
 
+/** Sign-in. Three ways in, because three different things need to get in: a
+ *  person with a password, a person holding an invite, and an agent or dev
+ *  holding a long-lived token. */
 function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => void }) {
-  const [value, setValue] = useState("");
+  const [mode, setMode] = useState<"login" | "invite" | "token">("login");
+  const [handle, setHandle] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      if (mode === "token") {
+        if (token.trim()) onSubmit(token.trim());
+      } else if (mode === "login") {
+        const r = await auth.login(handle.trim(), password);
+        onSubmit(r.token);
+      } else {
+        const r = await auth.accept({
+          code: code.trim(),
+          handle: handle.trim(),
+          password,
+          ...(email.trim() ? { email: email.trim() } : {}),
+        });
+        onSubmit(r.token);
+      }
+    } catch (ex) {
+      setErr((ex as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="auth">
-      <form
-        className="auth-card"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (value.trim()) onSubmit(value.trim());
-        }}
-      >
+      <form className="auth-card" onSubmit={(e) => void submit(e)}>
         <h1>
           <span className="logo-dot" /> bulletz
         </h1>
         <p>The context layer for local coding agents.</p>
-        {error && <div className="auth-err">{error}</div>}
-        <label htmlFor="tok">Workspace token</label>
-        <input
-          id="tok"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="blz_h_…"
-          autoFocus
-        />
-        <button className="send" type="submit" disabled={!value.trim()}>
-          Connect
+
+        <div className="auth-tabs">
+          {(["login", "invite", "token"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`auth-tab${mode === m ? " active" : ""}`}
+              onClick={() => {
+                setMode(m);
+                setErr("");
+              }}
+            >
+              {m === "login" ? "Sign in" : m === "invite" ? "I have an invite" : "Token"}
+            </button>
+          ))}
+        </div>
+
+        {(error || err) && <div className="auth-err">{err || error}</div>}
+
+        {mode === "token" ? (
+          <>
+            <label htmlFor="tok">Workspace or API token</label>
+            <input id="tok" value={token} onChange={(e) => setToken(e.target.value)} placeholder="blz_…" autoFocus />
+            <div className="auth-note">For agents, the MCP bridge, and local development.</div>
+          </>
+        ) : (
+          <>
+            {mode === "invite" && (
+              <>
+                <label htmlFor="code">Invite code</label>
+                <input id="code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="blz_i_…" autoFocus />
+              </>
+            )}
+            <label htmlFor="handle">Handle</label>
+            <input
+              id="handle"
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder="rishabh"
+              autoFocus={mode === "login"}
+            />
+            {mode === "invite" && (
+              <>
+                <label htmlFor="email">Email (optional)</label>
+                <input id="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+              </>
+            )}
+            <label htmlFor="pw">Password</label>
+            <input
+              id="pw"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === "invite" ? "at least 10 characters" : ""}
+            />
+          </>
+        )}
+
+        <button className="send" type="submit" disabled={busy}>
+          {busy ? "…" : mode === "invite" ? "Create account" : "Connect"}
         </button>
-        <div className="auth-note">npm run seed -w @bulletz/server</div>
       </form>
     </div>
   );
 }
 
-function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; kind: string } }) {
+function Workspace({
+  api,
+  me,
+}: {
+  api: Api;
+  me: { id: string; handle: string; kind: string; role: string };
+}) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [openThread, setOpenThread] = useState<string | null>(null);

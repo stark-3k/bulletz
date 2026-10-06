@@ -130,6 +130,16 @@ context is a replayable *query* over the log, not a synced copy of it.
 - **Widget refresh never touches a model.** A 30s tick re-invokes the tool
   server-side and pushes rows. If refresh cost an inference the feature would be
   unusable at any scale.
+- **Credentials are revocable, and that is the point.** A workspace token used
+  to be a password that never expired: losing a laptop meant rotating everyone.
+  Now people sign in with a password and hold a 30-day session they can list
+  and revoke per device; agents and the MCP bridge hold named API tokens
+  revocable one at a time. Disabling a person ends their sessions immediately
+  *and* disables the agents that act for them — anything less is a half-exit.
+- **Four roles, because a small team needs "who can reshape the workspace", not
+  a matrix.** guest reads; member writes; admin activates tools and widgets and
+  manages people; owner alone changes ownership. A workspace can never be left
+  without an active owner, and nobody can disable themselves.
 - **Agents get their own identity.** An agent acts *for* a human
   (`actors.owner_actor_id`) but posts under its own handle. Nobody reading a
   thread has to guess whether a human wrote it.
@@ -144,6 +154,7 @@ context is a replayable *query* over the log, not a synced copy of it.
 | MCP bridge — 12 tools, any MCP client | ✅ working |
 | Desktop app (Electron: chat + real pty terminal) | ✅ working |
 | Agent adapter — a chat message starts a Claude Code turn | ✅ working |
+| Auth: password sign-in, invites, roles, revocable sessions | ✅ working |
 | Voice channels (WebRTC mesh) | ✅ working |
 | Screen sharing | ⚠️ built; needs macOS Screen Recording permission |
 | Server-side tool registry + embedded live views | ✅ working |

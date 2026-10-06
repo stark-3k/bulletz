@@ -3,12 +3,13 @@ import Fastify from "fastify";
 import { WebSocketServer } from "ws";
 import { ZodError } from "zod";
 import { randomUUID } from "node:crypto";
-import { actorForToken } from "./auth.js";
+import { identify } from "./identity.js";
 import { pool } from "./db.js";
 import { env } from "./env.js";
 import { addConn, connectionCount } from "./realtime.js";
 import * as voice from "./voice.js";
 import { apiRoutes } from "./routes/api.js";
+import { authRoutes } from "./routes/auth.js";
 import { widgetRoutes } from "./routes/widgets.js";
 
 const app = Fastify({ logger: { level: env.logLevel } });
@@ -36,6 +37,7 @@ app.get("/health", async () => {
   return { ok: rows[0]?.n === 1, connections: connectionCount() };
 });
 
+await app.register(authRoutes, { prefix: "/v1" });
 await app.register(apiRoutes, { prefix: "/v1" });
 await app.register(widgetRoutes, { prefix: "/v1" });
 
@@ -49,7 +51,7 @@ app.server.on("upgrade", async (req, socket, head) => {
     if (url.pathname !== "/v1/stream") return socket.destroy();
 
     const token = url.searchParams.get("token");
-    const actor = token ? await actorForToken(token) : null;
+    const actor = token ? await identify(token) : null;
     if (!actor) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return socket.destroy();
