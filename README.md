@@ -56,6 +56,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   under either would dilute them. The bar for `project_links`: it must *not* be
   derivable from the checkout. The agent has the files; it does not know the
   production URL or which dashboard shows the error budget.
+- **Agent transcripts are local, and so is their history.** How an agent works
+  is private to the machine that ran it; what it concluded is posted to the
+  channel it was asked in. Runs are recorded to `agent-sessions.jsonl` in the
+  app's own data directory, never the server — that file also carries each
+  channel's Claude Code session id, so a channel keeps one continuous
+  conversation across app restarts instead of meeting a stranger.
 - **Channels are rooms; threads are branches.** A channel is a durable room.
   A thread hangs off one message inside it (`events.reply_to`), one level deep,
   and the channel shows top-level messages only — so a long exchange lives in

@@ -89,8 +89,11 @@ export class ClaudeCodeAdapter {
       env: Record<string, string>;
       mcpConfig: string;
       onEvent: (channelId: string, e: AgentEvent) => void;
+      resumeSessions?: Record<string, string>;
     },
-  ) {}
+  ) {
+    for (const [ch, sid] of Object.entries(opts.resumeSessions ?? {})) this.sessions.set(ch, sid);
+  }
 
   isRunning = (channelId: string) => this.running.has(channelId);
 

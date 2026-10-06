@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync } from "node:fs";
 import { ClaudeCodeAdapter, DEFAULT_POLICY, type AgentEvent, type Policy } from "./agent.js";
+import { SessionStore, type RunRecord } from "./sessions.js";
 
 const exec = promisify(execFile);
 
@@ -128,6 +129,10 @@ sandbox: false,
 app.whenReady().then(() => {
   const win = createWindow();
 
+  const sessions = new SessionStore(join(app.getPath("userData"), "agent-sessions.jsonl"));
+  /** Runs still in flight, accumulating their transcript until they finish. */
+  const inFlight = new Map<string, RunRecord>();
+
   /* ------------------------------ terminal ------------------------------ */
 
   ipcMain.handle("term:spawn", (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
@@ -183,7 +188,33 @@ app.whenReady().then(() => {
     cwd: PROJECT_ROOT,
     env: agentEnv(),
     mcpConfig: join(PROJECT_ROOT, ".mcp.json"),
+    // Carry each channel's claude session across app restarts, so a channel
+    // keeps one continuous conversation instead of meeting a stranger.
+    resumeSessions: sessions.latestSessions(),
     onEvent: (channelId, e: AgentEvent) => {
+      // Accumulate the run so it survives the window. The transcript stays
+      // local — this file is never sent to the server.
+      const rec = inFlight.get(channelId);
+      if (rec) {
+        rec.events.push(e);
+        if (e.type === "start") {
+          rec.sessionId = e.sessionId;
+          rec.model = e.model;
+        } else if (e.type === "end") {
+          rec.endedAt = new Date().toISOString();
+          rec.status = e.subtype;
+          rec.costUsd = e.costUsd;
+          rec.turns = e.turns;
+          sessions.append(rec);
+          inFlight.delete(channelId);
+        } else if (e.type === "error") {
+          rec.endedAt = new Date().toISOString();
+          rec.status = "error";
+          sessions.append(rec);
+          inFlight.delete(channelId);
+        }
+      }
+
       // The transcript is PRIVATE: it goes to this window only. An agent
       // thinking out loud and calling twelve tools is working, not reporting,
       // and mirroring all of it into a shared channel buries the room in noise.
@@ -229,11 +260,26 @@ app.whenReady().then(() => {
         return { ok: false, error: "A turn is already running in this channel." };
       }
       const trusted = byOwner || !policy.restrictOthers;
+      inFlight.set(channelId, {
+        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        channelId,
+        sessionId: null,
+        prompt,
+        model: null,
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        status: "running",
+        costUsd: null,
+        turns: null,
+        events: [],
+      });
       void adapter.run(channelId, prompt, policy, trusted);
       return { ok: true };
     },
   );
 
+  ipcMain.handle("agent:sessions", () => sessions.list());
+  ipcMain.handle("agent:session", (_e, { id }: { id: string }) => sessions.get(id));
   ipcMain.handle("agent:stop", (_e, { channelId }: { channelId: string }) => adapter.stop(channelId));
   ipcMain.handle("agent:status", (_e, { channelId }: { channelId: string }) => ({
     running: adapter.isRunning(channelId),

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("bulletz", {
     status: (channelId: string) =>
       ipcRenderer.invoke("agent:status", { channelId }) as Promise<{ running: boolean }>,
     policy: (patch?: unknown) => ipcRenderer.invoke("agent:policy", patch),
+    sessions: () => ipcRenderer.invoke("agent:sessions"),
+    session: (id: string) => ipcRenderer.invoke("agent:session", { id }),
     onEvent: (cb: (channelId: string, e: unknown) => void) => {
       const h = (_e: unknown, p: { channelId: string; event: unknown }) => cb(p.channelId, p.event);
       ipcRenderer.on("agent:event", h);

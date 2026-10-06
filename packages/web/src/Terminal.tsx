@@ -21,6 +21,8 @@ type Bridge = {
     status: (channelId: string) => Promise<{ running: boolean }>;
     policy: (patch?: Partial<AgentPolicy>) => Promise<AgentPolicy>;
     onEvent: (cb: (channelId: string, e: AgentRunEvent) => void) => () => void;
+    sessions: () => Promise<AgentSessionSummary[]>;
+    session: (id: string) => Promise<AgentSession | null>;
   };
 };
 
@@ -32,6 +34,22 @@ export type AgentPolicy = {
   maxBudgetUsd: number;
   restrictOthers: boolean;
 };
+
+export type AgentSessionSummary = {
+  id: string;
+  channelId: string;
+  /** Claude Code's own session id — `claude --resume <this>` reopens it. */
+  sessionId: string | null;
+  prompt: string;
+  model: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: string;
+  costUsd: number | null;
+  turns: number | null;
+};
+
+export type AgentSession = AgentSessionSummary & { events: AgentRunEvent[] };
 
 export type AgentRunEvent =
   | { type: "start"; sessionId: string; model: string }
