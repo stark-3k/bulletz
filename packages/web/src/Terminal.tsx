@@ -101,10 +101,17 @@ export function TerminalPane({ id }: { id: string }) {
   const [cwd, setCwd] = useState<string>("");
   const [exited, setExited] = useState<number | null>(null);
   const [reattached, setReattached] = useState(false);
+  // Bumping this tears the view down and builds a fresh one, which is what a
+  // restart is: the old pty is already gone, so spawn makes a new shell.
+  const [generation, setGeneration] = useState(0);
   const api = bridge();
+  // onData closes over the first render, so read the live value from a ref.
+  const exitedRef = useRef<number | null>(null);
+  exitedRef.current = exited;
 
   useEffect(() => {
     if (!api || !host.current) return;
+    setExited(null);
 
     const term = new Xterm({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
@@ -125,7 +132,10 @@ export function TerminalPane({ id }: { id: string }) {
       if (tid === id) term.write(data);
     });
     const offExit = api.term.onExit((tid, code) => {
-      if (tid === id) setExited(code);
+      if (tid !== id) return;
+      setExited(code);
+      // Say so in the terminal, the way a terminal would.
+      term.write(`\r\n\x1b[90m[process exited with code ${code} — press Enter to start a new shell]\x1b[0m\r\n`);
     });
 
     void api.term.spawn(id, term.cols, term.rows).then((info) => {
@@ -137,7 +147,14 @@ export function TerminalPane({ id }: { id: string }) {
       setReattached(info.reattached);
     });
 
-    term.onData((d) => api.term.write(id, d));
+    term.onData((d) => {
+      if (exitedRef.current !== null) {
+        // The shell is gone; keystrokes would go nowhere. Enter restarts.
+        if (d === "\r") setGeneration((g) => g + 1);
+        return;
+      }
+      api.term.write(id, d);
+    });
 
     const ro = new ResizeObserver(() => {
       try {
@@ -158,7 +175,7 @@ export function TerminalPane({ id }: { id: string }) {
       // is not. It is torn down only on an explicit kill or window close.
       term.dispose();
     };
-  }, [api, id]);
+  }, [api, id, generation]);
 
   if (!api) {
     return (
@@ -178,8 +195,15 @@ export function TerminalPane({ id }: { id: string }) {
       <div className="term-bar">
         <span className="term-dot" />
         <span className="term-cwd">{cwd || "starting…"}</span>
-        {reattached && <span className="term-reattached">reattached</span>}
-        {exited !== null && <span className="term-exit">exited {exited}</span>}
+        {reattached && exited === null && <span className="term-reattached">reattached</span>}
+        {exited !== null && (
+          <>
+            <span className="term-exit">exited {exited}</span>
+            <button className="term-restart" onClick={() => setGeneration((g) => g + 1)}>
+              Restart
+            </button>
+          </>
+        )}
       </div>
       <div className="term-host" ref={host} />
     </div>
