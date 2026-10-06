@@ -248,7 +248,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     "agent:run",
-    async (_e, { channelId, prompt, byOwner }: { channelId: string; prompt: string; byOwner: boolean }) => {
+    async (
+      _e,
+      {
+        channelId,
+        prompt,
+        byOwner,
+        actorId,
+        actorHandle,
+      }: {
+        channelId: string;
+        prompt: string;
+        byOwner: boolean;
+        actorId?: string;
+        actorHandle?: string;
+      },
+    ) => {
       const policy = loadPolicy();
       if (!policy.enabled) {
         return { ok: false, error: "Chat-triggered agent runs are disabled on this machine." };
@@ -262,6 +277,8 @@ app.whenReady().then(() => {
       const trusted = byOwner || !policy.restrictOthers;
       inFlight.set(channelId, {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        actorId: actorId ?? null,
+        actorHandle: actorHandle ?? null,
         channelId,
         sessionId: null,
         prompt,
@@ -278,8 +295,14 @@ app.whenReady().then(() => {
     },
   );
 
-  ipcMain.handle("agent:sessions", () => sessions.list());
-  ipcMain.handle("agent:session", (_e, { id }: { id: string }) => sessions.get(id));
+  // Scoped by the caller's actor: signing in as someone else must not expose
+  // the previous person's transcripts.
+  ipcMain.handle("agent:sessions", (_e, { actorId }: { actorId?: string } = {}) =>
+    sessions.list(actorId ?? null),
+  );
+  ipcMain.handle("agent:session", (_e, { id, actorId }: { id: string; actorId?: string }) =>
+    sessions.get(id, actorId ?? null),
+  );
   ipcMain.handle("agent:stop", (_e, { channelId }: { channelId: string }) => adapter.stop(channelId));
   ipcMain.handle("agent:status", (_e, { channelId }: { channelId: string }) => ({
     running: adapter.isRunning(channelId),

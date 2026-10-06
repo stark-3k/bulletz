@@ -16,13 +16,18 @@ type Bridge = {
     onExit: (cb: (id: string, code: number) => void) => () => void;
   };
   agent?: {
-    run: (channelId: string, prompt: string, byOwner: boolean) => Promise<{ ok: boolean; error?: string }>;
+    run: (
+      channelId: string,
+      prompt: string,
+      byOwner: boolean,
+      actor?: { id: string; handle: string },
+    ) => Promise<{ ok: boolean; error?: string }>;
     stop: (channelId: string) => Promise<boolean>;
     status: (channelId: string) => Promise<{ running: boolean }>;
     policy: (patch?: Partial<AgentPolicy>) => Promise<AgentPolicy>;
     onEvent: (cb: (channelId: string, e: AgentRunEvent) => void) => () => void;
-    sessions: () => Promise<AgentSessionSummary[]>;
-    session: (id: string) => Promise<AgentSession | null>;
+    sessions: (actorId: string) => Promise<AgentSessionSummary[]>;
+    session: (id: string, actorId: string) => Promise<AgentSession | null>;
   };
 };
 
@@ -37,6 +42,8 @@ export type AgentPolicy = {
 
 export type AgentSessionSummary = {
   id: string;
+  actorId: string | null;
+  actorHandle: string | null;
   channelId: string;
   /** Claude Code's own session id — `claude --resume <this>` reopens it. */
   sessionId: string | null;

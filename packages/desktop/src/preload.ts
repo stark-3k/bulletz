@@ -23,14 +23,20 @@ contextBridge.exposeInMainWorld("bulletz", {
     },
   },
   agent: {
-    run: (channelId: string, prompt: string, byOwner: boolean) =>
-      ipcRenderer.invoke("agent:run", { channelId, prompt, byOwner }) as Promise<{ ok: boolean; error?: string }>,
+    run: (channelId: string, prompt: string, byOwner: boolean, actor?: { id: string; handle: string }) =>
+      ipcRenderer.invoke("agent:run", {
+        channelId,
+        prompt,
+        byOwner,
+        actorId: actor?.id,
+        actorHandle: actor?.handle,
+      }) as Promise<{ ok: boolean; error?: string }>,
     stop: (channelId: string) => ipcRenderer.invoke("agent:stop", { channelId }),
     status: (channelId: string) =>
       ipcRenderer.invoke("agent:status", { channelId }) as Promise<{ running: boolean }>,
     policy: (patch?: unknown) => ipcRenderer.invoke("agent:policy", patch),
-    sessions: () => ipcRenderer.invoke("agent:sessions"),
-    session: (id: string) => ipcRenderer.invoke("agent:session", { id }),
+    sessions: (actorId: string) => ipcRenderer.invoke("agent:sessions", { actorId }),
+    session: (id: string, actorId: string) => ipcRenderer.invoke("agent:session", { id, actorId }),
     onEvent: (cb: (channelId: string, e: unknown) => void) => {
       const h = (_e: unknown, p: { channelId: string; event: unknown }) => cb(p.channelId, p.event);
       ipcRenderer.on("agent:event", h);

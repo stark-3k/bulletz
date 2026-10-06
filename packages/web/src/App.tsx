@@ -273,7 +273,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         await api.postMessage(activeId, "_Agent runs need the desktop app._");
       } else {
         setTranscripts((prev) => ({ ...prev, [activeId]: [] }));
-        const r = await b.agent.run(activeId, prompt, true);
+        const r = await b.agent.run(activeId, prompt, true, { id: me.id, handle: me.handle });
         if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
       }
     } else if (task?.[1]) {
@@ -316,7 +316,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         className={`${surface === "apps" ? "panes panes-apps" : "panes"}${memOpen ? "" : " mem-collapsed"}`}
       >
         {surface === "apps" ? (
-          <Apps api={api} tasks={tasks} widgets={widgets} onChange={refreshMemory} />
+          <Apps api={api} tasks={tasks} widgets={widgets} me={me} onChange={refreshMemory} />
         ) : (
         <>
         <div className="pane">

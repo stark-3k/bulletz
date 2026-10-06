@@ -24,11 +24,13 @@ export function Apps({
   api,
   tasks,
   widgets,
+  me,
   onChange,
 }: {
   api: Api;
   tasks: Task[];
   widgets: WidgetRow[];
+  me: { id: string; handle: string };
   onChange: () => void;
 }) {
   const [sel, setSel] = useState<AppId>({ type: "builtin", id: "board" });
@@ -108,7 +110,7 @@ export function Apps({
         {sel.type === "builtin" && sel.id === "registry" && (
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
-        {sel.type === "builtin" && sel.id === "sessions" && <AgentSessions />}
+        {sel.type === "builtin" && sel.id === "sessions" && <AgentSessions me={me} />}
         {sel.type === "builtin" && sel.id === "site" && <Embed />}
         {sel.type === "widget" &&
           (() => {
@@ -130,15 +132,15 @@ export function Apps({
 /** Every agent run this machine has made. Local by construction: a transcript
  *  is private to the machine that produced it, so this reads a file in the
  *  app's own data directory and never the server. */
-function AgentSessions() {
+function AgentSessions({ me }: { me: { id: string; handle: string } }) {
   const [rows, setRows] = useState<AgentSessionSummary[]>([]);
   const [open, setOpen] = useState<AgentSession | null>(null);
   const api = bridge()?.agent;
 
   useEffect(() => {
     if (!api) return;
-    void api.sessions().then(setRows);
-  }, [api]);
+    void api.sessions(me.id).then(setRows);
+  }, [api, me.id]);
 
   if (!api) {
     return (
@@ -153,7 +155,7 @@ function AgentSessions() {
       <div className="app-head">
         <span className="app-title">Agent sessions</span>
         <span className="app-note">
-          {rows.length} run{rows.length === 1 ? "" : "s"} · local to this machine, never synced
+          {rows.length} run{rows.length === 1 ? "" : "s"} · yours only · local to this machine, never synced
         </span>
       </div>
 
@@ -168,7 +170,7 @@ function AgentSessions() {
             <button
               key={r.id}
               className={`session-row${open?.id === r.id ? " active" : ""}`}
-              onClick={() => void api.session(r.id).then(setOpen)}
+              onClick={() => void api.session(r.id, me.id).then(setOpen)}
             >
               <div className="session-prompt">{r.prompt}</div>
               <div className="session-meta">
