@@ -14,6 +14,7 @@ import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
 import { contextPack, renderContextPack, search } from "../search.js";
 import * as voice from "../voice.js";
+import { createHmac } from "node:crypto";
 
 export async function apiRoutes(app: FastifyInstance) {
   // Every route below is authenticated as an actor; the log always knows who.
@@ -477,6 +478,38 @@ export async function apiRoutes(app: FastifyInstance) {
       online: input.online,
     });
     return { ok: true };
+  });
+
+  /** ICE servers, served rather than hardcoded.
+   *
+   *  TURN credentials belong to the deployment, not the client bundle, and a
+   *  static TURN password shipped to every user is a relay anyone can abuse.
+   *  When TURN_SECRET is set we mint short-lived credentials instead: the
+   *  username is an expiry timestamp and the password is its HMAC, which is
+   *  coturn's `use-auth-secret` scheme. */
+  app.get("/voice/config", async () => {
+    const stun = (process.env["STUN_URLS"] ?? "stun:stun.l.google.com:19302").split(",");
+    const iceServers: Array<{ urls: string[]; username?: string; credential?: string }> = [
+      { urls: stun },
+    ];
+
+    const turnUrls = process.env["TURN_URLS"];
+    if (turnUrls) {
+      const ttl = Number(process.env["TURN_TTL"] ?? 3600);
+      const secret = process.env["TURN_SECRET"];
+      if (secret) {
+        const username = `${Math.floor(Date.now() / 1000) + ttl}`;
+        const credential = createHmac("sha1", secret).update(username).digest("base64");
+        iceServers.push({ urls: turnUrls.split(","), username, credential });
+      } else if (process.env["TURN_USERNAME"] && process.env["TURN_PASSWORD"]) {
+        iceServers.push({
+          urls: turnUrls.split(","),
+          username: process.env["TURN_USERNAME"],
+          credential: process.env["TURN_PASSWORD"],
+        });
+      }
+    }
+    return { iceServers, hasTurn: Boolean(turnUrls) };
   });
 
   app.get("/voice", async (req) => ({

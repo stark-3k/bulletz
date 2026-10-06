@@ -238,7 +238,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     };
   }, []);
 
-  const voice = useVoice(socket, peerId);
+  const voice = useVoice(socket, peerId, api.baseUrl, api.authToken);
 
   const active = channels.find((t) => t.id === activeId) ?? null;
 

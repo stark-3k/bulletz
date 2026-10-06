@@ -41,6 +41,14 @@ export type Presence = {
 export class Api {
   constructor(private token: string) {}
 
+  /** Exposed so the voice layer can fetch its own ICE config. */
+  get baseUrl() {
+    return BASE;
+  }
+  get authToken() {
+    return this.token;
+  }
+
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${BASE}/v1${path}`, {
       method,

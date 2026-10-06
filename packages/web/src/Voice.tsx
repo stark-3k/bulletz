@@ -31,12 +31,13 @@ export type VoiceState = {
   error: string | null;
 };
 
-const ICE: RTCConfiguration = {
-  // Public STUN handles most networks. The ~10-20% behind symmetric NAT need a
-  // TURN relay, which is infrastructure someone has to pay for — without it
-  // those calls will simply fail to connect.
-  iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }],
-};
+/** Fallback only. The real list comes from the server, because TURN
+ *  credentials belong to the deployment and must not be baked into the
+ *  bundle. STUN alone fails behind symmetric NAT, so a deployment without
+ *  TURN will lose roughly one connection in five. */
+const FALLBACK_ICE: RTCIceServer[] = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
 
 type Conn = {
   pc: RTCPeerConnection;
@@ -45,7 +46,12 @@ type Conn = {
   ignoreOffer: boolean;
 };
 
-export function useVoice(socket: WebSocket | null, myPeerId: string | null) {
+export function useVoice(
+  socket: WebSocket | null,
+  myPeerId: string | null,
+  apiBase: string,
+  token: string,
+) {
   const [state, setState] = useState<VoiceState>({
     channelId: null,
     peers: [],
@@ -55,6 +61,7 @@ export function useVoice(socket: WebSocket | null, myPeerId: string | null) {
     error: null,
   });
 
+  const iceServers = useRef<RTCIceServer[]>(FALLBACK_ICE);
   const conns = useRef(new Map<string, Conn>());
   const localAudio = useRef<MediaStream | null>(null);
   const localScreen = useRef<MediaStream | null>(null);
@@ -72,7 +79,7 @@ export function useVoice(socket: WebSocket | null, myPeerId: string | null) {
       const existing = conns.current.get(peerId);
       if (existing) return existing;
 
-      const pc = new RTCPeerConnection(ICE);
+      const pc = new RTCPeerConnection({ iceServers: iceServers.current });
       const conn: Conn = { pc, polite, makingOffer: false, ignoreOffer: false };
       conns.current.set(peerId, conn);
 
@@ -208,7 +215,23 @@ export function useVoice(socket: WebSocket | null, myPeerId: string | null) {
 
   const join = useCallback(
     async (channelId: string) => {
-      if (!socket) return;
+      if (!socket) {
+        setState((s) => ({ ...s, error: "not connected to the workspace" }));
+        return;
+      }
+      // Fetch ICE per call: TURN credentials are short-lived by design.
+      try {
+        const r = await fetch(`${apiBase}/v1/voice/config`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const cfg = (await r.json()) as { iceServers: RTCIceServer[]; hasTurn: boolean };
+        if (cfg.iceServers?.length) iceServers.current = cfg.iceServers;
+        if (!cfg.hasTurn) {
+          console.warn("[voice] no TURN relay configured; peers behind symmetric NAT will fail");
+        }
+      } catch {
+        iceServers.current = FALLBACK_ICE;
+      }
       try {
         localAudio.current = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },

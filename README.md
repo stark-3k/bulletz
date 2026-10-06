@@ -65,12 +65,18 @@ context is a replayable *query* over the log, not a synced copy of it.
   app's own data directory, never the server — that file also carries each
   channel's Claude Code session id, so a channel keeps one continuous
   conversation across app restarts instead of meeting a stranger.
-- **Voice is a mesh, and that is a decision with a ceiling.** Every
-  participant connects directly to every other and the server only forwards
-  SDP/ICE — it never touches media. Connection count grows with the square of
-  the room, so past roughly five people this needs an SFU, which is a real
-  server component. There is also no TURN relay: the ~10-20% of networks behind
-  symmetric NAT will fail to connect until one is paid for.
+- **Voice is a mesh, and the ceiling is the sharer's uplink, not the server.**
+  The server forwards SDP/ICE and never touches media, so hosting it on a small
+  VPS costs nothing for a call. What does not scale is the mesh itself: a
+  participant sends their stream once per peer, so a screen share at ~1.5 Mbps
+  costs the sharer `(N-1) x 1.5` Mbps upstream — fine at four people, painful
+  at six on a home connection. Past roughly five, this wants an SFU.
+- **ICE config is served, not hardcoded.** TURN credentials belong to the
+  deployment, and a static TURN password in the client bundle is a relay anyone
+  can abuse — so `GET /v1/voice/config` mints short-lived HMAC credentials
+  (coturn's `use-auth-secret`) per call. Without TURN set, the ~10-20% of pairs
+  behind symmetric NAT simply fail to connect; TURN is also the one path where
+  media does flow through the VPS.
 - **Channels are rooms; threads are branches.** A channel is a durable room.
   A thread hangs off one message inside it (`events.reply_to`), one level deep,
   and the channel shows top-level messages only — so a long exchange lives in
