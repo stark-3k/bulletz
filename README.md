@@ -56,6 +56,12 @@ context is a replayable *query* over the log, not a synced copy of it.
   under either would dilute them. The bar for `project_links`: it must *not* be
   derivable from the checkout. The agent has the files; it does not know the
   production URL or which dashboard shows the error budget.
+- **Channels are rooms; threads are branches.** A channel is a durable room.
+  A thread hangs off one message inside it (`events.reply_to`), one level deep,
+  and the channel shows top-level messages only — so a long exchange lives in
+  its thread instead of flooding the room it started in. Reply counts follow
+  the HEAD of each reply's revision chain, so editing a reply does not inflate
+  the count and deleting one removes it.
 - **Edits are events, not mutations.** Editing a message appends a revision
   pointing at the one it replaces; deleting appends a tombstone. Reads resolve
   to the head of the chain, so the thread shows current text while every prior

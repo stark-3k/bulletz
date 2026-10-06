@@ -29,7 +29,7 @@ export async function apiRoutes(app: FastifyInstance) {
     const project = await repo.setProjectSummary(req.actor.workspace_id, body.summary);
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "project_summary",
       body: body.summary.slice(0, 500),
@@ -57,7 +57,7 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "project_link",
       body: `${body.kind}: ${body.label}`,
@@ -75,64 +75,72 @@ export async function apiRoutes(app: FastifyInstance) {
     return { link };
   });
 
-  /* ------------------------------- threads ------------------------------- */
+  /* ------------------------------- channels ------------------------------- */
 
-  app.get("/threads", async (req) => {
+  app.get("/channels", async (req) => {
     const query = z
       .object({ include_archived: z.coerce.boolean().default(false) })
       .parse(req.query);
     return {
-      threads: await repo.listThreads(req.actor.workspace_id, {
+      channels: await repo.listChannels(req.actor.workspace_id, {
         includeArchived: query.include_archived,
       }),
     };
   });
 
-  /** Archive, not destroy. The thread leaves the sidebar, search and context
+  /** Archive, not destroy. The channel leaves the sidebar, search and context
    *  packs; its events stay in the log. Reversible, humans only. */
-  app.patch("/threads/:id", async (req, reply) => {
+  app.patch("/channels/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const body = z.object({ status: z.enum(["open", "archived"]) }).parse(req.body);
     if (req.actor.kind !== "human") {
-      return reply.code(403).send({ error: "only a human actor can archive a thread" });
+      return reply.code(403).send({ error: "only a human actor can archive a channel" });
     }
-    const thread = await repo.setThreadStatus(req.actor.workspace_id, id, body.status, req.actor.id);
-    if (!thread) return reply.code(404).send({ error: "thread not found" });
+    const channel = await repo.setChannelStatus(req.actor.workspace_id, id, body.status, req.actor.id);
+    if (!channel) return reply.code(404).send({ error: "channel not found" });
 
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: thread.id,
+      channelId: channel.id,
       actorId: req.actor.id,
       kind: body.status === "archived" ? "thread_archived" : "thread_restored",
-      body: thread.title,
-      payload: { thread_id: thread.id },
+      body: channel.title,
+      payload: { channel_id: channel.id },
     });
-    broadcast(req.actor.workspace_id, { type: "thread", thread });
+    broadcast(req.actor.workspace_id, { type: "channel", channel });
     broadcast(req.actor.workspace_id, { type: "event", event });
-    return { thread };
+    return { channel };
   });
 
-  app.post("/threads", async (req, reply) => {
+  app.post("/channels", async (req, reply) => {
     const body = z.object({ title: z.string().min(1).max(200) }).parse(req.body);
-    const thread = await repo.createThread(req.actor.workspace_id, body.title, req.actor.id);
-    broadcast(req.actor.workspace_id, { type: "thread", thread });
-    return reply.code(201).send({ thread });
+    const channel = await repo.createChannel(req.actor.workspace_id, body.title, req.actor.id);
+    broadcast(req.actor.workspace_id, { type: "channel", channel });
+    return reply.code(201).send({ channel });
   });
 
-  app.get("/threads/:id/events", async (req, reply) => {
+  app.get("/channels/:id/events", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const query = z
       .object({ limit: z.coerce.number().int().min(1).max(500).default(100), before: z.string().optional() })
       .parse(req.query);
-    const thread = await repo.getThread(req.actor.workspace_id, id);
-    if (!thread) return reply.code(404).send({ error: "thread not found" });
+    const channel = await repo.getChannel(req.actor.workspace_id, id);
+    if (!channel) return reply.code(404).send({ error: "channel not found" });
     return {
-      thread,
-      events: await repo.threadEvents(req.actor.workspace_id, id, {
+      channel,
+      events: await repo.channelEvents(req.actor.workspace_id, id, {
         limit: query.limit,
         beforeSeq: query.before,
       }),
     };
+  });
+
+  /** One reply thread, addressed by its root message. */
+  app.get("/threads/:rootId", async (req, reply) => {
+    const { rootId } = z.object({ rootId: z.string().uuid() }).parse(req.params);
+    const t = await repo.threadEvents(req.actor.workspace_id, rootId);
+    if (!t.root) return reply.code(404).send({ error: "thread root not found" });
+    return t;
   });
 
   /* -------------------------------- events ------------------------------- */
@@ -145,26 +153,40 @@ export async function apiRoutes(app: FastifyInstance) {
   app.post("/events", async (req, reply) => {
     const input = PostEventInput.parse(req.body);
 
-    let threadId = input.thread_id ?? null;
-    if (!threadId && input.thread_title) {
-      const thread = await repo.createThread(req.actor.workspace_id, input.thread_title, req.actor.id);
-      broadcast(req.actor.workspace_id, { type: "thread", thread });
-      threadId = thread.id;
+    let channelId = input.channel_id ?? null;
+    if (!channelId && input.channel_title) {
+      const channel = await repo.createChannel(req.actor.workspace_id, input.channel_title, req.actor.id);
+      broadcast(req.actor.workspace_id, { type: "channel", channel });
+      channelId = channel.id;
     }
-    if (threadId) {
-      const exists = await repo.getThread(req.actor.workspace_id, threadId);
-      if (!exists) return reply.code(404).send({ error: "thread not found" });
+    if (channelId) {
+      const exists = await repo.getChannel(req.actor.workspace_id, channelId);
+      if (!exists) return reply.code(404).send({ error: "channel not found" });
+    }
+
+    // A reply inherits its root's channel, so a client cannot accidentally
+    // strand a thread in a different room.
+    let replyTo: string | null = null;
+    if (input.reply_to) {
+      const root = await repo.eventHead(req.actor.workspace_id, input.reply_to);
+      if (!root) return reply.code(404).send({ error: "message to reply to not found" });
+      if (root.reply_to) {
+        return reply.code(400).send({ error: "replies are one level deep; reply to the thread root" });
+      }
+      replyTo = root.id;
+      channelId = root.channel_id;
     }
 
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId,
+      channelId,
       actorId: req.actor.id,
       kind: input.kind,
       body: input.body,
       payload: input.payload,
       refs: input.refs,
       labels: input.labels,
+      replyTo,
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return reply.code(201).send({ event });
@@ -191,11 +213,12 @@ export async function apiRoutes(app: FastifyInstance) {
 
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: head.thread_id,
+      channelId: head.channel_id,
       actorId: req.actor.id,
       kind: "message",
       body: body.body,
       revisionOf: head.id,
+      replyTo: head.reply_to,
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return { event };
@@ -214,11 +237,12 @@ export async function apiRoutes(app: FastifyInstance) {
 
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: head.thread_id,
+      channelId: head.channel_id,
       actorId: req.actor.id,
       kind: "message_deleted",
       body: null,
       revisionOf: head.id,
+      replyTo: head.reply_to,
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return { event };
@@ -230,7 +254,7 @@ export async function apiRoutes(app: FastifyInstance) {
     const query = z
       .object({
         include_superseded: z.coerce.boolean().default(false),
-        thread_id: z.string().uuid().optional(),
+        channel_id: z.string().uuid().optional(),
         path: z.string().optional(),
         limit: z.coerce.number().int().min(1).max(200).default(50),
       })
@@ -238,7 +262,7 @@ export async function apiRoutes(app: FastifyInstance) {
     return {
       decisions: await repo.listDecisions(req.actor.workspace_id, {
         includeSuperseded: query.include_superseded,
-        threadId: query.thread_id,
+        channelId: query.channel_id,
         path: query.path,
         limit: query.limit,
       }),
@@ -249,7 +273,7 @@ export async function apiRoutes(app: FastifyInstance) {
     const input = CreateDecisionInput.parse(req.body);
     const decision = await repo.createDecision({
       workspaceId: req.actor.workspace_id,
-      threadId: input.thread_id ?? null,
+      channelId: input.channel_id ?? null,
       statement: input.statement,
       rationale: input.rationale,
       alternatives: input.alternatives,
@@ -264,7 +288,7 @@ export async function apiRoutes(app: FastifyInstance) {
     // A decision is also an event: the log stays the complete record.
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: input.thread_id ?? null,
+      channelId: input.channel_id ?? null,
       actorId: req.actor.id,
       kind: "decision",
       body: input.statement,
@@ -294,7 +318,7 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "constraint",
       body: input.rule,
@@ -311,7 +335,7 @@ export async function apiRoutes(app: FastifyInstance) {
     if (!constraint) return reply.code(404).send({ error: "active constraint not found" });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "constraint_retired",
       body: constraint.rule,
@@ -351,7 +375,7 @@ export async function apiRoutes(app: FastifyInstance) {
 
     const task = await repo.createTask({
       workspaceId: req.actor.workspace_id,
-      threadId: input.thread_id ?? null,
+      channelId: input.channel_id ?? null,
       title: input.title,
       body: input.body,
       labels: input.labels,
@@ -360,7 +384,7 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: input.thread_id ?? null,
+      channelId: input.channel_id ?? null,
       actorId: req.actor.id,
       kind: "task_created",
       body: input.title,
@@ -387,7 +411,7 @@ export async function apiRoutes(app: FastifyInstance) {
     if (!task) return reply.code(404).send({ error: "task not found" });
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: task.thread_id,
+      channelId: task.channel_id,
       actorId: req.actor.id,
       kind: "task_updated",
       body: body.status ? `${task.title} → ${body.status}` : `${task.title} (edited)`,
@@ -409,13 +433,13 @@ export async function apiRoutes(app: FastifyInstance) {
   app.get("/context", async (req) => {
     const query = z
       .object({
-        thread_id: z.string().uuid().optional(),
+        channel_id: z.string().uuid().optional(),
         query: z.string().max(500).optional(),
         format: z.enum(["json", "markdown"]).default("json"),
       })
       .parse(req.query);
     const pack = await contextPack(req.actor.workspace_id, {
-      thread_id: query.thread_id,
+      channel_id: query.channel_id,
       query: query.query,
     });
     if (query.format === "markdown") return { markdown: renderContextPack(pack) };

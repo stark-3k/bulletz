@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Decision, Event, Task, Thread } from "@bulletz/shared";
+import type { Decision, Event, Task, Channel } from "@bulletz/shared";
 import { Api, type Constraint, type Presence, type Project } from "./api.ts";
 import { TerminalPane, bridge, type AgentPolicy, type AgentRunEvent } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
@@ -88,8 +88,9 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
 }
 
 function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; kind: string } }) {
-  const [threads, setThreads] = useState<Thread[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [openThread, setOpenThread] = useState<string | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [constraints, setConstraints] = useState<Constraint[]>([]);
@@ -101,7 +102,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
   const [showArchived, setShowArchived] = useState(
     () => localStorage.getItem("bulletz.showArchived") === "1",
   );
-  const [agentRun, setAgentRun] = useState<{ threadId: string; status: string } | null>(null);
+  const [agentRun, setAgentRun] = useState<{ channelId: string; status: string } | null>(null);
   const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [surface, setSurface] = useState<"chat" | "apps">(
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
@@ -129,16 +130,16 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 
   useEffect(() => {
     void (async () => {
-      const { threads } = await api.threads();
-      setThreads(threads);
-      if (threads[0]) setActiveId(threads[0].id);
+      const { channels } = await api.channels();
+      setChannels(channels);
+      if (channels[0]) setActiveId(channels[0].id);
       await refreshMemory();
     })();
   }, [api, refreshMemory]);
 
   useEffect(() => {
     if (!activeId) return;
-    void api.threadEvents(activeId).then((r) => setEvents(r.events));
+    void api.channelEvents(activeId).then((r) => setEvents(r.events));
   }, [api, activeId]);
 
   // Realtime: the log is pushed, so every client and agent sees the same
@@ -150,11 +151,11 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         const type = m["type"] as unknown as string;
         if (type === "event") {
           const ev = m["event"] as unknown as Event;
-          if (ev.thread_id && ev.thread_id === activeRef.current) {
+          if (ev.channel_id && ev.channel_id === activeRef.current) {
             setEvents((prev) => {
               if (prev.some((p) => p.id === ev.id)) return prev;
               // A revision supersedes the event it points at, in place, so an
-              // edit does not jump the message to the bottom of the thread.
+              // edit does not jump the message to the bottom of the channel.
               if (ev.revision_of) {
                 const idx = prev.findIndex((p) => p.id === ev.revision_of);
                 if (idx >= 0) {
@@ -166,14 +167,14 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
               return [...prev, ev];
             });
           }
-          setThreads((prev) =>
+          setChannels((prev) =>
             prev
-              .map((t) => (t.id === ev.thread_id ? { ...t, last_event_at: ev.created_at } : t))
+              .map((t) => (t.id === ev.channel_id ? { ...t, last_event_at: ev.created_at } : t))
               .sort((a, b) => b.last_event_at.localeCompare(a.last_event_at)),
           );
-        } else if (type === "thread") {
-          const th = m["thread"] as unknown as Thread;
-          setThreads((prev) => (prev.some((p) => p.id === th.id) ? prev : [th, ...prev]));
+        } else if (type === "channel") {
+          const th = m["channel"] as unknown as Channel;
+          setChannels((prev) => (prev.some((p) => p.id === th.id) ? prev : [th, ...prev]));
         } else if (type === "decision" || type === "task" || type === "presence" || type === "widget") {
           void refreshMemory();
         }
@@ -186,7 +187,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
 
   // Live status of a chat-triggered agent turn. The transcript itself arrives
   // as ordinary events over the WebSocket, because the adapter posts it into
-  // the thread — so teammates see the work, not just the person who asked.
+  // the channel — so teammates see the work, not just the person who asked.
   useEffect(() => {
     const b = bridge();
     if (!b?.agent) return;
@@ -196,7 +197,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     const refresh = () => void b.agent?.policy().then(setPolicy);
     refresh();
     window.addEventListener("focus", refresh);
-    const off = b.agent.onEvent((threadId, e: AgentRunEvent) => {
+    const off = b.agent.onEvent((channelId, e: AgentRunEvent) => {
       const status =
         e.type === "start" ? `running · ${e.model}`
         : e.type === "tool" ? `${e.name}…`
@@ -204,7 +205,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         : e.type === "end" ? `done${e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}`
         : e.type === "error" ? `error: ${e.message.slice(0, 90)}`
         : "working…";
-      setAgentRun({ threadId, status });
+      setAgentRun({ channelId, status });
       if (e.type === "end" || e.type === "error") setTimeout(() => setAgentRun(null), 6000);
     });
     return () => {
@@ -213,14 +214,14 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
     };
   }, []);
 
-  const active = threads.find((t) => t.id === activeId) ?? null;
+  const active = channels.find((t) => t.id === activeId) ?? null;
 
   const newThread = async () => {
-    const title = prompt("Thread title");
+    const title = prompt("Channel title");
     if (!title?.trim()) return;
-    const { thread } = await api.createThread(title.trim());
-    setThreads((p) => [thread, ...p]);
-    setActiveId(thread.id);
+    const { channel } = await api.createChannel(title.trim());
+    setChannels((p) => [channel, ...p]);
+    setActiveId(channel.id);
   };
 
   /** Slash commands are how the decision log gets written by hand — the cheap
@@ -238,7 +239,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
       await api.createDecision({
         statement: statement!.trim(),
         ...(why.length ? { rationale: why.join(" -- ").trim() } : {}),
-        thread_id: activeId,
+        channel_id: activeId,
       });
     } else if (constrain?.[1]) {
       const [rule, ...why] = constrain[1].split(/\s*--\s*/);
@@ -268,7 +269,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
       }
     } else if (task?.[1]) {
-      await api.createTask({ title: task[1].trim(), thread_id: activeId });
+      await api.createTask({ title: task[1].trim(), channel_id: activeId });
     } else {
       await api.postMessage(activeId, text);
     }
@@ -312,7 +313,7 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         <>
         <div className="pane">
           <div className="pane-head">
-            Threads
+            Channels
             <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
               <button
                 className={`icon-btn${showArchived ? " on" : ""}`}
@@ -321,28 +322,31 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
                   const next = !showArchived;
                   setShowArchived(next);
                   localStorage.setItem("bulletz.showArchived", next ? "1" : "0");
-                  void api.threads(next).then((r) => setThreads(r.threads));
+                  void api.channels(next).then((r) => setChannels(r.channels));
                 }}
               >
                 ▤
               </button>
-              <button className="icon-btn" onClick={newThread} title="New thread">
+              <button className="icon-btn" onClick={newThread} title="New channel">
                 +
               </button>
             </span>
           </div>
           <div className="pane-body">
-            {threads.length === 0 && <div className="empty" style={{ padding: "8px 13px" }}>No threads yet</div>}
-            {threads.map((t) => (
+            {channels.length === 0 && <div className="empty" style={{ padding: "8px 13px" }}>No channels yet</div>}
+            {channels.map((t) => (
               <ThreadRow
                 key={t.id}
-                thread={t}
+                channel={t}
                 active={t.id === activeId}
-                onOpen={() => setActiveId(t.id)}
+                onOpen={() => {
+                  setActiveId(t.id);
+                  setOpenThread(null);
+                }}
                 onArchive={async () => {
-                  await api.setThreadStatus(t.id, t.status === "archived" ? "open" : "archived");
-                  const { threads: next } = await api.threads(showArchived);
-                  setThreads(next);
+                  await api.setChannelStatus(t.id, t.status === "archived" ? "open" : "archived");
+                  const { channels: next } = await api.channels(showArchived);
+                  setChannels(next);
                   if (t.id === activeId) setActiveId(next[0]?.id ?? null);
                 }}
               />
@@ -365,11 +369,18 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         </div>
 
         <div className="pane">
-          <div className="pane-head">{active?.title ?? "No thread"}</div>
+          <div className="pane-head">{active?.title ?? "No channel"}</div>
           <div className="pane-body">
-            <Stream events={events} widgets={widgets} api={api} me={me} onChange={refreshMemory} />
+            <Stream
+              events={events}
+              widgets={widgets}
+              api={api}
+              me={me}
+              onChange={refreshMemory}
+              onOpenThread={setOpenThread}
+            />
           </div>
-          {agentRun?.threadId === activeId && (
+          {agentRun?.channelId === activeId && (
             <div className="agent-strip">
               <span className="agent-dot" />
               <span>agent · {agentRun.status}</span>
@@ -386,6 +397,15 @@ function Workspace({ api, me }: { api: Api; me: { id: string; handle: string; ki
         </div>
         </>
 
+        )}
+
+        {openThread && (
+          <ThreadPanel
+            rootId={openThread}
+            api={api}
+            me={me}
+            onClose={() => setOpenThread(null)}
+          />
         )}
 
         <div className="pane mem-pane">
@@ -474,12 +494,14 @@ function Stream({
   api,
   me,
   onChange,
+  onOpenThread,
 }: {
   events: Event[];
   widgets: WidgetRow[];
   api: Api;
   me: { id: string };
   onChange: () => void;
+  onOpenThread: (rootId: string) => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -488,7 +510,7 @@ function Stream({
 
   return (
     <div className="stream">
-      {events.length === 0 && <div className="empty">Nothing in this thread yet.</div>}
+      {events.length === 0 && <div className="empty">Nothing in this channel yet.</div>}
       {events.map((e) => {
         if (e.kind === "message_deleted") {
           return (
@@ -505,46 +527,15 @@ function Stream({
           );
         }
         if (e.kind === "message") {
-          return <Message key={e.id} e={e} mine={e.actor_id === me.id} api={api} />;
-        }
-        if (false as boolean) {
-          const isAgent = e.actor_kind === "agent";
-          const refs = [
-            ...((e.refs.paths as string[] | undefined) ?? []),
-            ...((e.refs.prs as string[] | undefined) ?? []),
-          ];
           return (
-            <div className="msg" key={e.id}>
-              <div className={`avatar${isAgent ? " agent" : ""}`}>{initials(e.actor_handle ?? "?")}</div>
-              <div className="msg-main">
-                <div className="msg-head">
-                  <span className={`msg-who${isAgent ? " agent" : ""}`}>{e.actor_handle}</span>
-                  {isAgent && <span className="badge">agent</span>}
-                  <span className="msg-time">{time(e.created_at)}</span>
-                </div>
-                <div className="msg-body">{e.body}</div>
-                {refs.length > 0 && (
-                  <div className="msg-refs">
-                    {refs.map((r) => (
-                      <span className="ref" key={r}>
-                        {r}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            <Message
+              key={e.id}
+              e={e}
+              mine={e.actor_id === me.id}
+              api={api}
+              onOpenThread={onOpenThread}
+            />
           );
-        }
-        if (e.kind === "widget") {
-          const wid = (e.payload as { widget_id?: string }).widget_id;
-          const w = widgets.find((x) => x.id === wid);
-          if (w)
-            return (
-              <div key={e.id} className="stream-widget">
-                <WidgetWithGate widget={w} api={api} onChange={onChange} />
-              </div>
-            );
         }
         // Turn markers carry their meaning in the payload, not a body — render
         // them as a thin rule rather than an empty-looking message row.
@@ -715,24 +706,24 @@ function ProjectCard({ project }: { project: Project | null }) {
 }
 
 
-/** A thread row. Archiving is confirmed the same way deleting a message is —
- *  it removes the thread from the sidebar, from search and from what agents
+/** A channel row. Archiving is confirmed the same way deleting a message is —
+ *  it removes the channel from the sidebar, from search and from what agents
  *  read, so it deserves the same deliberate second step even though the
  *  events survive and it can be undone. */
 function ThreadRow({
-  thread,
+  channel,
   active,
   onOpen,
   onArchive,
 }: {
-  thread: Thread;
+  channel: Channel;
   active: boolean;
   onOpen: () => void;
   onArchive: () => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const archived = thread.status === "archived";
+  const archived = channel.status === "archived";
 
   useEffect(() => {
     if (!confirming) return;
@@ -757,15 +748,15 @@ function ThreadRow({
   };
 
   return (
-    <div className={`thread-row${active ? " active" : ""}${archived ? " archived" : ""}`}>
-      <button className="thread" onClick={onOpen}>
-        <div className="thread-title">{thread.title}</div>
-        <div className="thread-meta">
-          {archived ? "archived" : time(thread.last_event_at)}
+    <div className={`channel-row${active ? " active" : ""}${archived ? " archived" : ""}`}>
+      <button className="channel" onClick={onOpen}>
+        <div className="channel-title">{channel.title}</div>
+        <div className="channel-meta">
+          {archived ? "archived" : time(channel.last_event_at)}
         </div>
       </button>
       {confirming ? (
-        <span className="thread-confirm">
+        <span className="channel-confirm">
           <button className="danger solid" disabled={busy} onClick={() => void act()}>
             {busy ? "…" : "Archive"}
           </button>
@@ -773,8 +764,8 @@ function ThreadRow({
         </span>
       ) : (
         <button
-          className="thread-action"
-          title={archived ? "Restore thread" : "Archive thread"}
+          className="channel-action"
+          title={archived ? "Restore channel" : "Archive channel"}
           onClick={() => (archived ? void act() : setConfirming(true))}
         >
           {archived ? "↺" : "×"}
@@ -787,7 +778,136 @@ function ThreadRow({
 /** A message, with its own revision controls. Edits and deletes are appended
  *  to the log as new events, so "edited" is a fact about the chain, not a
  *  mutation of the original. */
-function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
+
+/** A reply thread, opened beside the channel. Slack's shape, and the reason
+ *  channels stay readable: a long exchange lives here instead of flooding the
+ *  room it started in. */
+function ThreadPanel({
+  rootId,
+  api,
+  me,
+  onClose,
+}: {
+  rootId: string;
+  api: Api;
+  me: { id: string };
+  onClose: () => void;
+}) {
+  const [root, setRoot] = useState<Event | null>(null);
+  const [replies, setReplies] = useState<Event[]>([]);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Count what the channel's reply chip counts: tombstones are shown in place
+  // so the thread keeps its shape, but they are not replies.
+  const live = replies.filter((r) => r.kind !== "message_deleted").length;
+
+  const load = useCallback(async () => {
+    const r = await api.thread(rootId);
+    setRoot(r.root);
+    setReplies(r.replies);
+  }, [api, rootId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Replies arrive over the same WebSocket as everything else.
+  useEffect(() => {
+    const ws = api.stream(
+      (raw) => {
+        const m = raw as { type?: string; event?: Event };
+        if (m.type === "event" && m.event && (m.event.reply_to === rootId || m.event.id === rootId)) {
+          void load();
+        }
+      },
+      () => {},
+      () => {},
+    );
+    return () => ws.close();
+  }, [api, rootId, load]);
+
+  const send = async () => {
+    const body = draft.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    try {
+      await api.postReply(rootId, body);
+      setDraft("");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pane thread-pane">
+      <div className="pane-head">
+        Thread
+        <button className="icon-btn" onClick={onClose} title="Close thread">
+          ×
+        </button>
+      </div>
+      <div className="pane-body">
+        <div className="stream">
+          {root && <Message e={root} mine={root.actor_id === me.id} api={api} inThread />}
+          <div className="thread-divider">
+            <span>
+              {live} {live === 1 ? "reply" : "replies"}
+            </span>
+          </div>
+          {replies.map((r) =>
+            r.kind === "message_deleted" ? (
+              <div className="msg tombstone" key={r.id}>
+                <div className="avatar ghost">—</div>
+                <div className="msg-main">
+                  <div className="msg-head">
+                    <span className="msg-who">{r.actor_handle}</span>
+                  </div>
+                  <div className="msg-deleted">message deleted</div>
+                </div>
+              </div>
+            ) : (
+              <Message key={r.id} e={r} mine={r.actor_id === me.id} api={api} inThread />
+            ),
+          )}
+        </div>
+      </div>
+      <div className="composer">
+        <div className="composer-box">
+          <textarea
+            rows={1}
+            value={draft}
+            placeholder="Reply…"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <button className="send" onClick={() => void send()} disabled={!draft.trim() || busy}>
+            Reply
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Message({
+  e,
+  mine,
+  api,
+  onOpenThread,
+  inThread = false,
+}: {
+  e: Event;
+  mine: boolean;
+  api: Api;
+  onOpenThread?: (rootId: string) => void;
+  inThread?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(e.body ?? "");
   const [busy, setBusy] = useState(false);
@@ -795,7 +915,7 @@ function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
   const isAgent = e.actor_kind === "agent";
 
   // The confirm state reverts on its own: an armed Delete button left hanging
-  // in a thread is a trap the next time someone reaches for the row.
+  // in a channel is a trap the next time someone reaches for the row.
   useEffect(() => {
     if (!confirming) return;
     const t = setTimeout(() => setConfirming(false), 5000);
@@ -893,6 +1013,19 @@ function Message({ e, mine, api }: { e: Event; mine: boolean; api: Api }) {
               <span className="ref" key={r}>{r}</span>
             ))}
           </div>
+        )}
+
+        {!inThread && onOpenThread && (
+          (e.reply_count ?? 0) > 0 ? (
+            <button className="reply-count" onClick={() => onOpenThread(e.id)}>
+              {e.reply_count} {e.reply_count === 1 ? "reply" : "replies"}
+              {e.last_reply_at && <span className="reply-when">· last {time(e.last_reply_at)}</span>}
+            </button>
+          ) : (
+            <button className="reply-start" onClick={() => onOpenThread(e.id)}>
+              Reply in thread
+            </button>
+          )
         )}
       </div>
     </div>
@@ -1001,7 +1134,7 @@ function Composer({
           value={text}
           disabled={disabled}
           placeholder={
-            disabled ? "Select a thread" : "Message, @agent to run, or /decide · /constrain · /task"
+            disabled ? "Select a channel" : "Message, @agent to run, or /decide · /constrain · /task"
           }
           onChange={(e) => {
             setText(e.target.value);

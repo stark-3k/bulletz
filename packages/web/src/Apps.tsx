@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Task } from "@bulletz/shared";
 import type { Api } from "./api.ts";
+import { Embed } from "./Embed.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 
 /** The apps surface. A widget pinned into a chat message is an attachment;
@@ -14,7 +15,7 @@ const COLUMNS = [
   { key: "done", label: "Done" },
 ] as const;
 
-type AppId = { type: "builtin"; id: "board" | "registry" } | { type: "widget"; id: string };
+type AppId = { type: "builtin"; id: "board" | "registry" | "site" } | { type: "widget"; id: string };
 
 export function Apps({
   api,
@@ -57,6 +58,17 @@ export function Apps({
             </span>
           </button>
 
+          <button
+            className={`app-item${isSel({ type: "builtin", id: "site" }) ? " active" : ""}`}
+            onClick={() => setSel({ type: "builtin", id: "site" })}
+          >
+            <span className="app-glyph">◈</span>
+            <span>
+              bulletz.ai
+              <span className="app-sub">embedded site</span>
+            </span>
+          </button>
+
           <div className="app-group-label">Published apps</div>
           {active.length === 0 && <div className="empty" style={{ padding: "4px 13px" }}>none active</div>}
           {active.map((w) => (
@@ -82,6 +94,7 @@ export function Apps({
         {sel.type === "builtin" && sel.id === "registry" && (
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
+        {sel.type === "builtin" && sel.id === "site" && <Embed />}
         {sel.type === "widget" &&
           (() => {
             const w = widgets.find((x) => x.id === sel.id);

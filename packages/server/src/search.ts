@@ -1,6 +1,6 @@
 import type { SearchHit } from "@bulletz/shared";
 import { q } from "./db.js";
-import { getProject, listConstraints, listDecisions, listTasks, threadEvents } from "./repo.js";
+import { getProject, listConstraints, listDecisions, listTasks, channelEvents } from "./repo.js";
 
 /** Unit weights. Extracted units rank above raw chat on purpose: a decision is
  *  worth more to a caller than the twelve messages that produced it. */
@@ -25,7 +25,7 @@ export async function search(
   workspaceId: string,
   input: {
     query: string;
-    thread_id?: string | undefined;
+    channel_id?: string | undefined;
     kinds?: string[] | undefined;
     since?: string | undefined;
     limit: number;
@@ -43,7 +43,7 @@ export async function search(
     -- recency decay: a 30-day-old unit scores half what today's does
     ev as (
       select 'event'::text as unit, e.id::text, ts_rank(e.search, tsq.query) as rank,
-             null::text as title, coalesce(e.body,'') as text, e.thread_id,
+             null::text as title, coalesce(e.body,'') as text, e.channel_id,
              a.handle as actor_handle, e.created_at,
              array[e.id::text] as source_event_ids
         from events e join actors a on a.id = e.actor_id, tsq
@@ -52,12 +52,12 @@ export async function search(
          -- a tombstoned message must not surface at all
          and not exists (select 1 from events n where n.revision_of = e.id)
          and e.kind <> 'message_deleted'
-         -- archiving a thread must also remove it from what an agent reads,
+         -- archiving a channel must also remove it from what an agent reads,
          -- or "deleting" it would be cosmetic
          and not exists (
-           select 1 from threads t where t.id = e.thread_id and t.status = 'archived'
+           select 1 from channels t where t.id = e.channel_id and t.status = 'archived'
          )
-         and ($3::uuid is null or e.thread_id = $3::uuid)
+         and ($3::uuid is null or e.channel_id = $3::uuid)
          and ($4::text[] is null or e.kind = any($4::text[]))
          and ($5::timestamptz is null or e.created_at >= $5::timestamptz)
     ),
@@ -66,12 +66,12 @@ export async function search(
              d.statement as title,
              coalesce(d.statement,'') || case when d.rationale is null then ''
                else E'\nWhy: ' || d.rationale end as text,
-             d.thread_id, a.handle, d.decided_at as created_at,
+             d.channel_id, a.handle, d.decided_at as created_at,
              coalesce(array(select x::text from unnest(d.source_event_ids) x), '{}') 
         from decisions d left join actors a on a.id = d.decided_by, tsq
        where d.workspace_id = $1 and d.search @@ tsq.query
          and ($6::boolean or d.status in ('accepted','proposed'))
-         and ($3::uuid is null or d.thread_id = $3::uuid)
+         and ($3::uuid is null or d.channel_id = $3::uuid)
     ),
     con as (
       select 'constraint'::text, c.id::text, ts_rank(c.search, tsq.query),
@@ -86,14 +86,14 @@ export async function search(
     tk as (
       select 'task'::text, t.id::text, ts_rank(t.search, tsq.query),
              t.title, coalesce(t.title,'') || E'\n' || coalesce(t.body,'') as text,
-             t.thread_id, null::text, t.updated_at as created_at, '{}'::text[]
+             t.channel_id, null::text, t.updated_at as created_at, '{}'::text[]
         from tasks t, tsq
        where t.workspace_id = $1 and t.search @@ tsq.query
          and t.status not in ('done','cancelled')
     ),
     all_units as (select * from ev union all select * from dec
                   union all select * from con union all select * from tk)
-    select unit, id, title, text, thread_id, actor_handle, created_at, source_event_ids,
+    select unit, id, title, text, channel_id, actor_handle, created_at, source_event_ids,
            (rank
              * case unit when 'decision' then ${WEIGHTS.decision}
                          when 'constraint' then ${WEIGHTS.constraint}
@@ -107,7 +107,7 @@ export async function search(
     [
       workspaceId,
       input.query,
-      input.thread_id ?? null,
+      input.channel_id ?? null,
       input.kinds ?? null,
       input.since ?? null,
       input.include_superseded,
@@ -120,10 +120,10 @@ export async function search(
 
 /** A context pack is a context policy, executed. One call gives an agent what
  *  the project knows: durable rules, current decisions, live work, and the
- *  thread it is standing in. This is what makes a fresh agent competent. */
+ *  channel it is standing in. This is what makes a fresh agent competent. */
 export async function contextPack(
   workspaceId: string,
-  opts: { thread_id?: string | undefined; query?: string | undefined; budget?: number } = {},
+  opts: { channel_id?: string | undefined; query?: string | undefined; budget?: number } = {},
 ) {
   const [project, constraints, decisions, tasks] = await Promise.all([
     getProject(workspaceId),
@@ -132,10 +132,10 @@ export async function contextPack(
     listTasks(workspaceId, { status: ["open", "in_progress", "blocked"], limit: 25 }),
   ]);
 
-  const thread = opts.thread_id
+  const channel = opts.channel_id
     ? {
-        id: opts.thread_id,
-        events: await threadEvents(workspaceId, opts.thread_id, { limit: 40 }),
+        id: opts.channel_id,
+        events: await channelEvents(workspaceId, opts.channel_id, { limit: 40 }),
       }
     : null;
 
@@ -144,13 +144,13 @@ export async function contextPack(
         query: opts.query,
         limit: 12,
         include_superseded: false,
-        thread_id: undefined,
+        channel_id: undefined,
         kinds: undefined,
         since: undefined,
       })
     : [];
 
-  return { project, constraints, decisions, tasks, thread, relevant };
+  return { project, constraints, decisions, tasks, channel, relevant };
 }
 
 /** Renders a context pack as the markdown an agent actually reads. Kept on the
@@ -207,9 +207,9 @@ export function renderContextPack(pack: Awaited<ReturnType<typeof contextPack>>)
     out.push("");
   }
 
-  if (pack.thread) {
-    out.push("## This thread");
-    for (const e of pack.thread.events) {
+  if (pack.channel) {
+    out.push("## This channel");
+    for (const e of pack.channel.events) {
       if (e.kind === "message") out.push(`- ${e.actor_handle}: ${e.body ?? ""}`);
       else out.push(`- (${e.kind}) ${e.actor_handle}: ${(e.body ?? "").slice(0, 200)}`);
     }

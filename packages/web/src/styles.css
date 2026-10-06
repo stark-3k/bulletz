@@ -79,21 +79,21 @@ button { font: inherit; cursor: pointer; }
 
 /* ------------------------------ threads ------------------------------ */
 
-.thread {
+.channel {
   width: 100%; text-align: left; background: none; border: 0;
   border-left: 2px solid transparent;
   color: var(--fg-dim); padding: 9px 13px; display: block;
 }
-.thread:hover { background: var(--bg-raised); color: var(--fg); }
-.thread.active {
+.channel:hover { background: var(--bg-raised); color: var(--fg); }
+.channel.active {
   background: var(--bg-raised); color: var(--fg);
   border-left-color: var(--accent);
 }
-.thread-title {
+.channel-title {
   font-size: 12.5px; font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.thread-meta { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); margin-top: 2px; }
+.channel-meta { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); margin-top: 2px; }
 
 /* ------------------------------ presence ----------------------------- */
 
@@ -482,6 +482,33 @@ button { font: inherit; cursor: pointer; }
 .app-head .widget-activate { margin-left: auto; }
 .app-full { padding: 16px; }
 
+/* ----------------------------- embedded site ----------------------------- */
+
+.embed { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.embed-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.embed-pill {
+  background: var(--bg-input); border: 1px solid var(--line); border-radius: 5px;
+  color: var(--fg-dim); padding: 3px 9px; font-size: 11.5px; text-decoration: none;
+}
+.embed-pill:hover { color: var(--fg); border-color: #2f3b52; }
+.embed-pill.active { color: var(--fg); border-color: var(--accent); }
+
+.embed-bar {
+  display: flex; align-items: center; gap: 7px; flex: none;
+  padding: 6px 16px; border-bottom: 1px solid var(--line-soft); background: var(--bg-raised);
+}
+.embed-lock { font-size: 9px; opacity: 0.6; }
+.embed-url {
+  font-family: var(--mono); font-size: 11px; color: var(--fg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.embed-loading { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-left: auto; }
+
+/* The frame paints its own background; keep the shell dark underneath so a
+   slow load does not flash white. */
+.embed-stage { flex: 1; min-height: 0; background: var(--bg); }
+.embed-frame { width: 100%; height: 100%; border: 0; display: block; }
+
 /* ------------------------------ task board ------------------------------ */
 
 .board { display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -637,34 +664,84 @@ button { font: inherit; cursor: pointer; }
 
 /* ----------------------------- thread rows ----------------------------- */
 
-.thread-row {
+.channel-row {
   display: flex; align-items: stretch;
   border-left: 2px solid transparent;
 }
-.thread-row:hover { background: var(--bg-raised); }
-.thread-row.active { background: var(--bg-raised); border-left-color: var(--accent); }
-.thread-row.archived { opacity: 0.5; }
-.thread-row .thread { border-left: 0; background: none; flex: 1; min-width: 0; }
-.thread-row:hover .thread, .thread-row.active .thread { background: none; }
+.channel-row:hover { background: var(--bg-raised); }
+.channel-row.active { background: var(--bg-raised); border-left-color: var(--accent); }
+.channel-row.archived { opacity: 0.5; }
+.channel-row .channel { border-left: 0; background: none; flex: 1; min-width: 0; }
+.channel-row:hover .channel, .channel-row.active .channel { background: none; }
 
-.thread-action {
+.channel-action {
   display: none; align-items: center; flex: none;
   background: none; border: 0; color: var(--fg-faint);
   padding: 0 10px; font-size: 13px; line-height: 1;
 }
-.thread-row:hover .thread-action { display: flex; }
-.thread-action:hover { color: var(--danger); }
-.thread-row.archived .thread-action { display: flex; }
-.thread-row.archived .thread-action:hover { color: var(--decision); }
+.channel-row:hover .channel-action { display: flex; }
+.channel-action:hover { color: var(--danger); }
+.channel-row.archived .channel-action { display: flex; }
+.channel-row.archived .channel-action:hover { color: var(--decision); }
 
-.thread-confirm { display: flex; align-items: center; gap: 3px; padding: 0 7px 0 0; flex: none; }
-.thread-confirm button {
+.channel-confirm { display: flex; align-items: center; gap: 3px; padding: 0 7px 0 0; flex: none; }
+.channel-confirm button {
   background: none; border: 1px solid var(--line); border-radius: 4px;
   color: var(--fg-faint); font-size: 10px; padding: 1px 6px;
 }
-.thread-confirm button.danger.solid {
+.channel-confirm button.danger.solid {
   background: var(--danger); border-color: var(--danger); color: #1a0d0d; font-weight: 600;
 }
-.thread-confirm button:not(.danger):hover { color: var(--fg); border-color: var(--fg-faint); }
+.channel-confirm button:not(.danger):hover { color: var(--fg); border-color: var(--fg-faint); }
 
 .icon-btn.on { color: var(--accent); border-color: #2b3c58; }
+
+/* ---------------------------- reply threads ---------------------------- */
+
+.reply-count, .reply-start {
+  margin-top: 5px; background: none; border: 0; padding: 2px 0;
+  font-family: var(--mono); font-size: 10.5px; text-align: left;
+}
+.reply-count { color: var(--accent); font-weight: 600; }
+.reply-count:hover { text-decoration: underline; }
+.reply-when { color: var(--fg-faint); font-weight: 400; margin-left: 5px; }
+/* The invitation to start a thread stays quiet until the row is hovered. */
+.reply-start { color: var(--fg-faint); opacity: 0; transition: opacity 0.1s; }
+.msg:hover .reply-start { opacity: 1; }
+.reply-start:hover { color: var(--fg-dim); }
+
+.thread-pane {
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.panes:has(.thread-pane) { grid-template-columns: 236px 1fr 360px 330px; }
+.panes.mem-collapsed:has(.thread-pane) { grid-template-columns: 236px 1fr 360px 34px; }
+.panes.panes-apps:has(.thread-pane) { grid-template-columns: 1fr 360px 330px; }
+
+.thread-divider {
+  display: flex; align-items: center; gap: 9px;
+  margin: 10px 0 4px; font-family: var(--mono);
+  font-size: 9.5px; color: var(--fg-faint);
+}
+.thread-divider::after { content: ""; height: 1px; background: var(--line-soft); flex: 1; }
+.thread-pane .composer { border-top: 1px solid var(--line); }
+
+/* The row is a flex pair: a growing button and a fixed action. The button
+   keeps `width:100%` from its standalone rule, which fights flex-basis and
+   defeats the title's ellipsis — so override width and give it min-width:0,
+   without which a flex child never shrinks below its content. */
+.channel-row { align-items: center; }
+.channel-row > .channel {
+  flex: 1 1 0%;
+  min-width: 0;
+  width: auto;
+  padding: 8px 4px 8px 13px;
+}
+.channel-row > .channel-action,
+.channel-row > .channel-confirm { flex: 0 0 auto; }
+.channel-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

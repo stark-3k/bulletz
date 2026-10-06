@@ -44,7 +44,7 @@ const WidgetInput = z.object({
   tool_args: z.record(z.unknown()).default({}),
   view: ViewSpec.optional(),
   html: z.string().max(400_000).optional(),
-  thread_id: z.string().uuid().optional(),
+  channel_id: z.string().uuid().optional(),
 });
 
 export async function widgetRoutes(app: FastifyInstance) {
@@ -86,7 +86,7 @@ export async function widgetRoutes(app: FastifyInstance) {
     );
     const event = await appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "tool_drafted",
       body: `${input.name} — ${input.description}`,
@@ -112,7 +112,7 @@ export async function widgetRoutes(app: FastifyInstance) {
     if (!tool) return reply.code(404).send({ error: "tool not found" });
     const event = await appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: null,
+      channelId: null,
       actorId: req.actor.id,
       kind: "tool_activated",
       body: (tool as { name: string }).name,
@@ -186,7 +186,7 @@ export async function widgetRoutes(app: FastifyInstance) {
 
     const event = await appendEvent({
       workspaceId: req.actor.workspace_id,
-      threadId: input.thread_id ?? null,
+      channelId: input.channel_id ?? null,
       actorId: req.actor.id,
       kind: "widget",
       body: input.name,

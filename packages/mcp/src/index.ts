@@ -8,7 +8,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { Decision, Event, SearchHit, Task, Thread } from "@bulletz/shared";
+import type { Decision, Event, SearchHit, Task, Channel } from "@bulletz/shared";
 import { z } from "zod";
 import { api, qs } from "./client.js";
 
@@ -24,15 +24,15 @@ const fail = (e: unknown) => ({
 
 server.tool(
   "context_pack",
-  "Get what this project knows: what it is and where it lives (repo, deployed URLs, dashboards), durable constraints, current decisions, open work, and optionally a thread's history. CALL THIS FIRST when starting work on an unfamiliar task — it is the project's memory, which the repo does not contain.",
+  "Get what this project knows: what it is and where it lives (repo, deployed URLs, dashboards), durable constraints, current decisions, open work, and optionally a channel's history. CALL THIS FIRST when starting work on an unfamiliar task — it is the project's memory, which the repo does not contain.",
   {
-    thread_id: z.string().uuid().optional().describe("Include this thread's recent messages"),
+    channel_id: z.string().uuid().optional().describe("Include this channel's recent messages"),
     query: z.string().max(500).optional().describe("Also include context relevant to this topic"),
   },
   async (args) => {
     try {
       const r = await api.get<{ markdown: string }>(
-        `/context${qs({ thread_id: args.thread_id, query: args.query, format: "markdown" })}`,
+        `/context${qs({ channel_id: args.channel_id, query: args.query, format: "markdown" })}`,
       );
       return text(r.markdown);
     } catch (e) {
@@ -46,7 +46,7 @@ server.tool(
   "Search the workspace log, decisions, constraints and tasks. Returns ranked units, each with the source event ids you can drill into. Use for 'why did we…', 'what did we decide about…', 'has anyone touched…'.",
   {
     query: z.string().min(1).max(500),
-    thread_id: z.string().uuid().optional(),
+    channel_id: z.string().uuid().optional(),
     kinds: z.array(z.string()).optional().describe("Restrict to event kinds, e.g. ['message','decision']"),
     since: z.string().optional().describe("ISO timestamp lower bound"),
     limit: z.number().int().min(1).max(50).default(20),
@@ -72,23 +72,23 @@ server.tool(
 );
 
 server.tool(
-  "get_thread",
-  "Read a conversation thread's events in order.",
+  "get_channel",
+  "Read a conversation channel's events in order.",
   {
-    thread_id: z.string().uuid(),
+    channel_id: z.string().uuid(),
     limit: z.number().int().min(1).max(500).default(100),
   },
   async (args) => {
     try {
-      const r = await api.get<{ thread: Thread; events: Event[] }>(
-        `/threads/${args.thread_id}/events${qs({ limit: args.limit })}`,
+      const r = await api.get<{ channel: Channel; events: Event[] }>(
+        `/channels/${args.channel_id}/events${qs({ limit: args.limit })}`,
       );
       const lines = r.events.map((e) =>
         e.kind === "message"
           ? `${e.actor_handle}: ${e.body ?? ""}`
           : `(${e.kind}) ${e.actor_handle}: ${e.body ?? ""}`,
       );
-      return text(`# ${r.thread.title}\n\n${lines.join("\n")}`);
+      return text(`# ${r.channel.title}\n\n${lines.join("\n")}`);
     } catch (e) {
       return fail(e);
     }
@@ -96,15 +96,15 @@ server.tool(
 );
 
 server.tool(
-  "list_threads",
-  "List conversation threads, most recently active first.",
+  "list_channels",
+  "List conversation channels, most recently active first.",
   {},
   async () => {
     try {
-      const r = await api.get<{ threads: Thread[] }>("/threads");
-      if (!r.threads.length) return text("No threads yet.");
+      const r = await api.get<{ channels: Channel[] }>("/channels");
+      if (!r.channels.length) return text("No channels yet.");
       return text(
-        r.threads.map((t) => `${t.id}  ${t.last_event_at.slice(0, 16)}  [${t.status}] ${t.title}`).join("\n"),
+        r.channels.map((t) => `${t.id}  ${t.last_event_at.slice(0, 16)}  [${t.status}] ${t.title}`).join("\n"),
       );
     } catch (e) {
       return fail(e);
@@ -117,7 +117,7 @@ server.tool(
   "List the project's decisions. Superseded ones are excluded by default — the current answer is what you want.",
   {
     path: z.string().optional().describe("Only decisions tagged with this file path"),
-    thread_id: z.string().uuid().optional(),
+    channel_id: z.string().uuid().optional(),
     include_superseded: z.boolean().default(false),
     limit: z.number().int().min(1).max(100).default(30),
   },
@@ -144,11 +144,18 @@ server.tool(
 
 server.tool(
   "post_message",
-  "Post a message into a thread so your human teammates can see it. Use this to report what you did, ask a question, or flag something — you are posting under your own agent identity, not impersonating anyone.",
+  "Post a message into a channel so your human teammates can see it. Use this to report what you did, ask a question, or flag something — you are posting under your own agent identity, not impersonating anyone.",
   {
     body: z.string().min(1).max(50_000),
-    thread_id: z.string().uuid().optional().describe("Omit and pass thread_title to start a new thread"),
-    thread_title: z.string().min(1).max(200).optional(),
+    channel_id: z.string().uuid().optional().describe("Omit and pass channel_title to start a new channel"),
+    channel_title: z.string().min(1).max(200).optional(),
+    reply_to: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "Post as a reply in this message's thread instead of at the top level of the channel. Use it to keep a long exchange out of the main room.",
+      ),
     refs: z
       .object({
         paths: z.array(z.string()).optional(),
@@ -162,11 +169,14 @@ server.tool(
       const r = await api.post<{ event: Event }>("/events", {
         kind: "message",
         body: args.body,
-        thread_id: args.thread_id,
-        thread_title: args.thread_title,
+        channel_id: args.channel_id,
+        channel_title: args.channel_title,
+        reply_to: args.reply_to,
         refs: args.refs ?? {},
       });
-      return text(`Posted to thread ${r.event.thread_id ?? "(none)"} as event ${r.event.id}.`);
+      return text(
+        `Posted ${args.reply_to ? "as a reply" : "to channel"} ${r.event.channel_id ?? "(none)"} as event ${r.event.id}.`,
+      );
     } catch (e) {
       return fail(e);
     }
@@ -181,7 +191,7 @@ server.tool(
     rationale: z.string().max(10_000).optional().describe("Why. This is the part that stops it being re-litigated."),
     alternatives: z.array(z.string()).default([]),
     supersedes_id: z.string().uuid().optional(),
-    thread_id: z.string().uuid().optional(),
+    channel_id: z.string().uuid().optional(),
     entities: z
       .object({ paths: z.array(z.string()).optional(), prs: z.array(z.string()).optional() })
       .optional(),
@@ -226,7 +236,7 @@ server.tool(
     title: z.string().min(3).max(500),
     body: z.string().max(50_000).optional(),
     labels: z.array(z.string()).default([]),
-    thread_id: z.string().uuid().optional(),
+    channel_id: z.string().uuid().optional(),
     assignee_handle: z.string().optional(),
   },
   async (args) => {
@@ -448,7 +458,7 @@ server.tool(
       })
       .optional(),
     html: z.string().max(400000).optional().describe("kind='html': a full fragment. No network access."),
-    thread_id: z.string().uuid().optional().describe("Post it into this thread"),
+    channel_id: z.string().uuid().optional().describe("Post it into this channel"),
   },
   async (args) => {
     try {
@@ -541,12 +551,29 @@ server.tool(
 
 server.tool(
   "delete_message",
-  "Retract a message you posted. It stops appearing in the thread and in search, but the event stays in the log for audit — this is a retraction, not an erasure. You can only delete your own messages.",
+  "Retract a message you posted. It stops appearing in the channel and in search, but the event stays in the log for audit — this is a retraction, not an erasure. You can only delete your own messages.",
   { event_id: z.string().uuid() },
   async (args) => {
     try {
       await api.del(`/events/${args.event_id}`);
       return text("Message retracted.");
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+
+server.tool(
+  "get_thread",
+  "Read one reply thread: the message it hangs off, plus its replies in order.",
+  { root_id: z.string().uuid().describe("The id of the message the thread hangs off") },
+  async (args) => {
+    try {
+      const r = await api.get<{ root: Event | null; replies: Event[] }>(`/threads/${args.root_id}`);
+      if (!r.root) return text("Thread not found.");
+      const line = (e: Event) => `${e.actor_handle}: ${e.body ?? ""}`;
+      return text([line(r.root), "--- replies ---", ...r.replies.map(line)].join("\n"));
     } catch (e) {
       return fail(e);
     }

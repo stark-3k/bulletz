@@ -1,4 +1,4 @@
-import type { Decision, Event, Task, Thread } from "@bulletz/shared";
+import type { Decision, Event, Task, Channel } from "@bulletz/shared";
 
 const BASE = import.meta.env.VITE_BULLETZ_URL ?? "http://localhost:4000";
 
@@ -57,30 +57,35 @@ export class Api {
 
   me = () =>
     this.call<{ actor: { id: string; handle: string; kind: string; workspace_id: string } }>("GET", "/me");
-  threads = (includeArchived = false) =>
-    this.call<{ threads: Thread[] }>(
+  channels = (includeArchived = false) =>
+    this.call<{ channels: Channel[] }>(
       "GET",
-      `/threads${includeArchived ? "?include_archived=true" : ""}`,
+      `/channels${includeArchived ? "?include_archived=true" : ""}`,
     );
-  createThread = (title: string) => this.call<{ thread: Thread }>("POST", "/threads", { title });
-  setThreadStatus = (id: string, status: "open" | "archived") =>
-    this.call<{ thread: Thread }>("PATCH", `/threads/${id}`, { status });
-  threadEvents = (id: string) =>
-    this.call<{ thread: Thread; events: Event[] }>("GET", `/threads/${id}/events?limit=200`);
-  postMessage = (threadId: string, body: string) =>
-    this.call<{ event: Event }>("POST", "/events", { thread_id: threadId, kind: "message", body });
+  createChannel = (title: string) => this.call<{ channel: Channel }>("POST", "/channels", { title });
+  setChannelStatus = (id: string, status: "open" | "archived") =>
+    this.call<{ channel: Channel }>("PATCH", `/channels/${id}`, { status });
+  channelEvents = (id: string) =>
+    this.call<{ channel: Channel; events: Event[] }>("GET", `/channels/${id}/events?limit=200`);
+  thread = (rootId: string) =>
+    this.call<{ root: Event; replies: Event[] }>("GET", `/threads/${rootId}`);
+  postReply = (rootId: string, body: string) =>
+    this.call<{ event: Event }>("POST", "/events", { reply_to: rootId, kind: "message", body });
+
+  postMessage = (channelId: string, body: string) =>
+    this.call<{ event: Event }>("POST", "/events", { channel_id: channelId, kind: "message", body });
   editMessage = (id: string, body: string) =>
     this.call<{ event: Event }>("PATCH", `/events/${id}`, { body });
   deleteMessage = (id: string) => this.call("DELETE", `/events/${id}`);
 
   decisions = () => this.call<{ decisions: Decision[] }>("GET", "/decisions?include_superseded=true");
-  createDecision = (input: { statement: string; rationale?: string; thread_id?: string }) =>
+  createDecision = (input: { statement: string; rationale?: string; channel_id?: string }) =>
     this.call<{ decision: Decision }>("POST", "/decisions", input);
   constraints = () => this.call<{ constraints: Constraint[] }>("GET", "/constraints");
   createConstraint = (input: { rule: string; rationale?: string }) =>
     this.call("POST", "/constraints", input);
   tasks = () => this.call<{ tasks: Task[] }>("GET", "/tasks");
-  createTask = (input: { title: string; thread_id?: string }) =>
+  createTask = (input: { title: string; channel_id?: string }) =>
     this.call<{ task: Task }>("POST", "/tasks", input);
   updateTask = (id: string, status: string) =>
     this.call<{ task: Task }>("PATCH", `/tasks/${id}`, { status });

@@ -49,10 +49,10 @@ function savePolicy(p: Policy) {
   writeFileSync(policyPath, JSON.stringify(p, null, 2));
 }
 
-/** Posts an agent's turn into the shared thread, so the work is visible to the
+/** Posts an agent's turn into the shared channel, so the work is visible to the
  *  whole team instead of dying in one person's scrollback. */
-async function postToThread(
-  threadId: string,
+async function postToChannel(
+  channelId: string,
   kind: string,
   body: string | null,
   payload: Record<string, unknown> = {},
@@ -64,14 +64,14 @@ async function postToThread(
   // what the actor model exists to prevent — so there is no fallback.
   const token = env["BULLETZ_AGENT_TOKEN"];
   if (!token) {
-    console.warn("BULLETZ_AGENT_TOKEN is not set; agent output will not be posted to the thread");
+    console.warn("BULLETZ_AGENT_TOKEN is not set; agent output will not be posted to the channel");
     return;
   }
   try {
     await fetch(`${base}/v1/events`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ thread_id: threadId, kind, body, payload }),
+      body: JSON.stringify({ channel_id: channelId, kind, body, payload }),
     });
   } catch {
     /* the UI still sees the live stream over IPC */
@@ -171,17 +171,17 @@ app.whenReady().then(() => {
     cwd: PROJECT_ROOT,
     env: projectEnv(),
     mcpConfig: join(PROJECT_ROOT, ".mcp.json"),
-    onEvent: (threadId, e: AgentEvent) => {
-      if (!win.isDestroyed()) win.webContents.send("agent:event", { threadId, event: e });
+    onEvent: (channelId, e: AgentEvent) => {
+      if (!win.isDestroyed()) win.webContents.send("agent:event", { channelId, event: e });
       // Mirror the turn into the shared log. Text becomes a message from the
       // agent's own identity; tool calls become tool_call events.
-      if (e.type === "text") void postToThread(threadId, "message", e.text);
-      else if (e.type === "tool") void postToThread(threadId, "tool_call", e.name, { input: e.input });
+      if (e.type === "text") void postToChannel(channelId, "message", e.text);
+      else if (e.type === "tool") void postToChannel(channelId, "tool_call", e.name, { input: e.input });
       else if (e.type === "start")
-        void postToThread(threadId, "agent_turn_start", null, { model: e.model, session: e.sessionId });
+        void postToChannel(channelId, "agent_turn_start", null, { model: e.model, session: e.sessionId });
       else if (e.type === "end")
-        void postToThread(threadId, "agent_turn_end", null, { subtype: e.subtype, cost_usd: e.costUsd, turns: e.turns });
-      else if (e.type === "error") void postToThread(threadId, "agent_error", e.message);
+        void postToChannel(channelId, "agent_turn_end", null, { subtype: e.subtype, cost_usd: e.costUsd, turns: e.turns });
+      else if (e.type === "error") void postToChannel(channelId, "agent_error", e.message);
     },
   });
 
@@ -195,7 +195,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     "agent:run",
-    async (_e, { threadId, prompt, byOwner }: { threadId: string; prompt: string; byOwner: boolean }) => {
+    async (_e, { channelId, prompt, byOwner }: { channelId: string; prompt: string; byOwner: boolean }) => {
       const policy = loadPolicy();
       if (!policy.enabled) {
         return { ok: false, error: "Chat-triggered agent runs are disabled on this machine." };
@@ -203,18 +203,18 @@ app.whenReady().then(() => {
       if (policy.triggerFrom === "owner" && !byOwner) {
         return { ok: false, error: "Only this machine's owner may start a turn here." };
       }
-      if (adapter.isRunning(threadId)) {
-        return { ok: false, error: "A turn is already running in this thread." };
+      if (adapter.isRunning(channelId)) {
+        return { ok: false, error: "A turn is already running in this channel." };
       }
       const trusted = byOwner || !policy.restrictOthers;
-      void adapter.run(threadId, prompt, policy, trusted);
+      void adapter.run(channelId, prompt, policy, trusted);
       return { ok: true };
     },
   );
 
-  ipcMain.handle("agent:stop", (_e, { threadId }: { threadId: string }) => adapter.stop(threadId));
-  ipcMain.handle("agent:status", (_e, { threadId }: { threadId: string }) => ({
-    running: adapter.isRunning(threadId),
+  ipcMain.handle("agent:stop", (_e, { channelId }: { channelId: string }) => adapter.stop(channelId));
+  ipcMain.handle("agent:status", (_e, { channelId }: { channelId: string }) => ({
+    running: adapter.isRunning(channelId),
   }));
 
   win.on("closed", () => adapter.stopAll());

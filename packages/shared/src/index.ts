@@ -41,7 +41,7 @@ export const Actor = z.object({
 });
 export type Actor = z.infer<typeof Actor>;
 
-export const Thread = z.object({
+export const Channel = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
   title: z.string(),
@@ -49,12 +49,12 @@ export const Thread = z.object({
   created_at: z.string(),
   last_event_at: z.string(),
 });
-export type Thread = z.infer<typeof Thread>;
+export type Channel = z.infer<typeof Channel>;
 
 export const Event = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
-  thread_id: z.string().uuid().nullable(),
+  channel_id: z.string().uuid().nullable(),
   actor_id: z.string().uuid(),
   actor_handle: z.string().optional(),
   actor_kind: ActorKind.optional(),
@@ -66,6 +66,9 @@ export const Event = z.object({
   seq: z.string(),
   created_at: z.string(),
   revision_of: z.string().uuid().nullable().optional(),
+  reply_to: z.string().uuid().nullable().optional(),
+  reply_count: z.number().optional(),
+  last_reply_at: z.string().nullable().optional(),
   root_id: z.string().uuid().optional(),
   edited: z.boolean().optional(),
 });
@@ -77,7 +80,7 @@ export type DecisionStatus = z.infer<typeof DecisionStatus>;
 export const Decision = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
-  thread_id: z.string().uuid().nullable(),
+  channel_id: z.string().uuid().nullable(),
   statement: z.string(),
   rationale: z.string().nullable(),
   alternatives: z.array(z.unknown()),
@@ -95,7 +98,7 @@ export type Decision = z.infer<typeof Decision>;
 export const Task = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
-  thread_id: z.string().uuid().nullable(),
+  channel_id: z.string().uuid().nullable(),
   title: z.string(),
   body: z.string().nullable(),
   status: z.enum(["open", "in_progress", "blocked", "done", "cancelled"]),
@@ -109,8 +112,10 @@ export type Task = z.infer<typeof Task>;
 /* ------------------------------- requests ------------------------------- */
 
 export const PostEventInput = z.object({
-  thread_id: z.string().uuid().optional(),
-  thread_title: z.string().min(1).max(200).optional(),
+  channel_id: z.string().uuid().optional(),
+  /** Set to a message id to post this as a reply in that message's thread. */
+  reply_to: z.string().uuid().optional(),
+  channel_title: z.string().min(1).max(200).optional(),
   kind: z.string().default("message"),
   // Nullable, not merely optional: marker events (agent_turn_start/end,
   // tombstones) carry their meaning in `kind` + `payload` and have no body.
@@ -122,7 +127,7 @@ export const PostEventInput = z.object({
 export type PostEventInput = z.infer<typeof PostEventInput>;
 
 export const CreateDecisionInput = z.object({
-  thread_id: z.string().uuid().optional(),
+  channel_id: z.string().uuid().optional(),
   statement: z.string().min(3).max(2000),
   rationale: z.string().max(10_000).optional(),
   alternatives: z.array(z.string()).default([]),
@@ -141,7 +146,7 @@ export const CreateConstraintInput = z.object({
 });
 
 export const CreateTaskInput = z.object({
-  thread_id: z.string().uuid().optional(),
+  channel_id: z.string().uuid().optional(),
   title: z.string().min(3).max(500),
   body: z.string().max(50_000).optional(),
   labels: z.array(z.string()).default([]),
@@ -151,7 +156,7 @@ export type CreateTaskInput = z.infer<typeof CreateTaskInput>;
 
 export const SearchInput = z.object({
   query: z.string().min(1).max(500),
-  thread_id: z.string().uuid().optional(),
+  channel_id: z.string().uuid().optional(),
   kinds: z.array(z.string()).optional(),
   since: z.string().optional(),
   limit: z.number().int().min(1).max(100).default(20),
@@ -167,7 +172,7 @@ export const SearchHit = z.object({
   score: z.number(),
   title: z.string().nullable(),
   text: z.string(),
-  thread_id: z.string().uuid().nullable(),
+  channel_id: z.string().uuid().nullable(),
   actor_handle: z.string().nullable(),
   created_at: z.string(),
   source_event_ids: z.array(z.string()),
@@ -190,7 +195,7 @@ export type PresenceInput = z.infer<typeof PresenceInput>;
 export type ServerMessage =
   | { type: "hello"; workspace_id: string; actor: Actor }
   | { type: "event"; event: Event }
-  | { type: "thread"; thread: Thread }
+  | { type: "channel"; channel: Channel }
   | { type: "decision"; decision: Decision }
   | { type: "task"; task: Task }
   | { type: "presence"; actor_handle: string; online: boolean }

@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
  *
  * MCP is pull-only: it lets an agent read and write the workspace, but nothing
  * wakes it. This is the other half — a chat message starts a turn, and the
- * transcript streams back into the thread so the work is visible to everyone
+ * transcript streams back into the channel so the work is visible to everyone
  * rather than dying in someone's scrollback.
  *
  * Everything vendor-specific lives in this file. The rest of the app speaks
@@ -72,7 +72,7 @@ type Run = { proc: ChildProcessWithoutNullStreams; claudeSessionId: string | nul
 
 export class ClaudeCodeAdapter {
   readonly id = "claude-code";
-  /** thread id -> claude session id, so a thread is one continuous conversation */
+  /** channel id -> claude session id, so a channel is one continuous conversation */
   private sessions = new Map<string, string>();
   private running = new Map<string, Run>();
 
@@ -81,17 +81,17 @@ export class ClaudeCodeAdapter {
       cwd: string;
       env: Record<string, string>;
       mcpConfig: string;
-      onEvent: (threadId: string, e: AgentEvent) => void;
+      onEvent: (channelId: string, e: AgentEvent) => void;
     },
   ) {}
 
-  isRunning = (threadId: string) => this.running.has(threadId);
+  isRunning = (channelId: string) => this.running.has(channelId);
 
-  stop(threadId: string) {
-    const run = this.running.get(threadId);
+  stop(channelId: string) {
+    const run = this.running.get(channelId);
     if (!run) return false;
     run.proc.kill("SIGTERM");
-    this.running.delete(threadId);
+    this.running.delete(channelId);
     return true;
   }
 
@@ -99,13 +99,13 @@ export class ClaudeCodeAdapter {
     for (const id of [...this.running.keys()]) this.stop(id);
   }
 
-  async run(threadId: string, prompt: string, policy: Policy, trusted: boolean): Promise<void> {
-    if (this.running.has(threadId)) {
-      this.opts.onEvent(threadId, { type: "error", message: "a turn is already running in this thread" });
+  async run(channelId: string, prompt: string, policy: Policy, trusted: boolean): Promise<void> {
+    if (this.running.has(channelId)) {
+      this.opts.onEvent(channelId, { type: "error", message: "a turn is already running in this channel" });
       return;
     }
 
-    const prior = this.sessions.get(threadId);
+    const prior = this.sessions.get(channelId);
     const sessionId = prior ?? randomUUID();
 
     const grants = trusted
@@ -127,7 +127,7 @@ export class ClaudeCodeAdapter {
       "--append-system-prompt",
       [
         "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work.",
-        "Your reply is posted into a shared team thread, so write for teammates who did not see the task.",
+        "Your reply is posted into a shared team channel, so write for teammates who did not see the task.",
         // Stating the grants up front matters: there is no approval surface in
         // this session, so an ungranted tool fails silently when tried. Without
         // this an agent plans an implementation it cannot apply, and only finds
@@ -147,7 +147,7 @@ export class ClaudeCodeAdapter {
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
 
-    this.running.set(threadId, { proc, claudeSessionId: null });
+    this.running.set(channelId, { proc, claudeSessionId: null });
 
     let stderr = "";
     proc.stderr.on("data", (d: Buffer) => {
@@ -163,14 +163,14 @@ export class ClaudeCodeAdapter {
       } catch {
         return; // non-JSON noise on stdout is not fatal
       }
-      this.handle(threadId, sessionId, m);
+      this.handle(channelId, sessionId, m);
     });
 
     await new Promise<void>((resolve) => {
       proc.on("close", (code) => {
-        this.running.delete(threadId);
+        this.running.delete(channelId);
         if (code !== 0 && code !== null) {
-          this.opts.onEvent(threadId, {
+          this.opts.onEvent(channelId, {
             type: "error",
             message: `claude exited ${code}${stderr ? `: ${stderr.slice(0, 400)}` : ""}`,
           });
@@ -178,20 +178,20 @@ export class ClaudeCodeAdapter {
         resolve();
       });
       proc.on("error", (err) => {
-        this.running.delete(threadId);
-        this.opts.onEvent(threadId, { type: "error", message: err.message });
+        this.running.delete(channelId);
+        this.opts.onEvent(channelId, { type: "error", message: err.message });
         resolve();
       });
     });
   }
 
-  private handle(threadId: string, fallbackSession: string, m: Record<string, unknown>) {
+  private handle(channelId: string, fallbackSession: string, m: Record<string, unknown>) {
     const type = m["type"] as string | undefined;
 
     if (type === "system" && m["subtype"] === "init") {
       const sid = (m["session_id"] as string) ?? fallbackSession;
-      this.sessions.set(threadId, sid);
-      this.opts.onEvent(threadId, {
+      this.sessions.set(channelId, sid);
+      this.opts.onEvent(channelId, {
         type: "start",
         sessionId: sid,
         model: (m["model"] as string) ?? "unknown",
@@ -205,9 +205,9 @@ export class ClaudeCodeAdapter {
       >;
       for (const c of content) {
         if (c["type"] === "text" && typeof c["text"] === "string" && c["text"].trim()) {
-          this.opts.onEvent(threadId, { type: "text", text: c["text"] });
+          this.opts.onEvent(channelId, { type: "text", text: c["text"] });
         } else if (c["type"] === "tool_use") {
-          this.opts.onEvent(threadId, {
+          this.opts.onEvent(channelId, {
             type: "tool",
             name: (c["name"] as string) ?? "tool",
             input: c["input"],
@@ -223,7 +223,7 @@ export class ClaudeCodeAdapter {
       >;
       for (const c of content) {
         if (c["type"] === "tool_result") {
-          this.opts.onEvent(threadId, {
+          this.opts.onEvent(channelId, {
             type: "tool_result",
             name: "tool",
             ok: c["is_error"] !== true,
@@ -234,7 +234,7 @@ export class ClaudeCodeAdapter {
     }
 
     if (type === "result") {
-      this.opts.onEvent(threadId, {
+      this.opts.onEvent(channelId, {
         type: "end",
         subtype: (m["subtype"] as string) ?? "success",
         costUsd: (m["total_cost_usd"] as number) ?? null,

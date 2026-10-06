@@ -1,12 +1,28 @@
-import type { Decision, Event, SearchHit, Task, Thread } from "@bulletz/shared";
+import type { Decision, Event, SearchHit, Task, Channel } from "@bulletz/shared";
 import { maybeOne, one, q } from "./db.js";
 
 const EVENT_COLS = `
-  e.id, e.workspace_id, e.thread_id, e.actor_id, a.handle as actor_handle,
+  e.id, e.workspace_id, e.channel_id, e.actor_id, a.handle as actor_handle,
   a.kind as actor_kind, e.kind, e.body, e.payload, e.refs, e.labels,
-  e.seq::text as seq, e.created_at, e.revision_of,
+  e.seq::text as seq, e.created_at, e.revision_of, e.reply_to,
   coalesce(r.root_id, e.id) as root_id,
   (e.revision_of is not null) as edited`;
+
+/** Replies hang off a root message. A root's reply count and last reply time
+ *  are computed against the ROOT of each reply's revision chain, so editing a
+ *  reply does not inflate the count. */
+const REPLY_STATS = `
+  (select count(*) from events x
+    where x.reply_to = coalesce(r.root_id, e.id)
+      -- count the HEAD of each reply's revision chain: an edit must not add to
+      -- the total, and a tombstoned reply must drop out of it. Counting
+      -- originals instead keeps deleted replies in the tally forever.
+      and not exists (select 1 from events n where n.revision_of = x.id)
+      and x.kind <> 'message_deleted')::int as reply_count,
+  (select max(x.created_at) from events x
+    where x.reply_to = coalesce(r.root_id, e.id)
+      and not exists (select 1 from events n where n.revision_of = x.id)
+      and x.kind <> 'message_deleted')::text as last_reply_at`;
 
 /** A revision chain's head is the event nothing points at. Reads resolve to
  *  heads so the UI shows the current text, while every prior version stays in
@@ -23,15 +39,15 @@ const ROOT_CTE = `
   )
   select id as rid, root_id, root_seq from chain`;
 
-/* -------------------------------- threads -------------------------------- */
+/* -------------------------------- channels -------------------------------- */
 
-export async function listThreads(
+export async function listChannels(
   workspaceId: string,
   opts: { includeArchived?: boolean; limit?: number } = {},
-): Promise<Thread[]> {
-  return q<Thread>(
+): Promise<Channel[]> {
+  return q<Channel>(
     `select id, workspace_id, title, status, created_at, last_event_at
-       from threads
+       from channels
       where workspace_id = $1
         and ($2::boolean or status <> 'archived')
       order by last_event_at desc limit $3`,
@@ -42,40 +58,40 @@ export async function listThreads(
 /** Archive is reversible and non-destructive, so any human member may do it.
  *  Agents may not: workspace-level removal is a human decision, the same rule
  *  that gates tool activation. */
-export async function setThreadStatus(
+export async function setChannelStatus(
   workspaceId: string,
-  threadId: string,
+  channelId: string,
   status: "open" | "archived",
   actorId: string,
-): Promise<Thread | null> {
-  return maybeOne<Thread>(
-    `update threads
+): Promise<Channel | null> {
+  return maybeOne<Channel>(
+    `update channels
         set status = $3,
             archived_at = case when $3 = 'archived' then now() else null end,
             archived_by = case when $3 = 'archived' then $4::uuid else null end
       where workspace_id = $1 and id = $2
       returning id, workspace_id, title, status, created_at, last_event_at`,
-    [workspaceId, threadId, status, actorId],
+    [workspaceId, channelId, status, actorId],
   );
 }
 
-export async function createThread(
+export async function createChannel(
   workspaceId: string,
   title: string,
   createdBy: string,
-): Promise<Thread> {
-  return one<Thread>(
-    `insert into threads (workspace_id, title, created_by) values ($1, $2, $3)
+): Promise<Channel> {
+  return one<Channel>(
+    `insert into channels (workspace_id, title, created_by) values ($1, $2, $3)
       returning id, workspace_id, title, status, created_at, last_event_at`,
     [workspaceId, title, createdBy],
   );
 }
 
-export async function getThread(workspaceId: string, threadId: string): Promise<Thread | null> {
-  return maybeOne<Thread>(
+export async function getChannel(workspaceId: string, channelId: string): Promise<Channel | null> {
+  return maybeOne<Channel>(
     `select id, workspace_id, title, status, created_at, last_event_at
-       from threads where workspace_id = $1 and id = $2`,
-    [workspaceId, threadId],
+       from channels where workspace_id = $1 and id = $2`,
+    [workspaceId, channelId],
   );
 }
 
@@ -83,7 +99,7 @@ export async function getThread(workspaceId: string, threadId: string): Promise<
 
 export async function appendEvent(input: {
   workspaceId: string;
-  threadId: string | null;
+  channelId: string | null;
   actorId: string;
   kind: string;
   body?: string | null | undefined;
@@ -91,19 +107,20 @@ export async function appendEvent(input: {
   refs?: Record<string, unknown>;
   labels?: string[];
   revisionOf?: string | null;
+  replyTo?: string | null;
 }): Promise<Event> {
   const row = await one<Event>(
     `with ins as (
-       insert into events (workspace_id, thread_id, actor_id, kind, body, payload, refs, labels, revision_of)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[], $9)
+       insert into events (workspace_id, channel_id, actor_id, kind, body, payload, refs, labels, revision_of, reply_to)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::text[], $9, $10)
        returning *
      ), roots as (${ROOT_CTE})
-     select ${EVENT_COLS} from ins e
+     select ${EVENT_COLS}, ${REPLY_STATS} from ins e
        join actors a on a.id = e.actor_id
        left join roots r on r.rid = e.id`,
     [
       input.workspaceId,
-      input.threadId,
+      input.channelId,
       input.actorId,
       input.kind,
       input.body ?? null,
@@ -111,33 +128,60 @@ export async function appendEvent(input: {
       JSON.stringify(input.refs ?? {}),
       input.labels ?? [],
       input.revisionOf ?? null,
+      input.replyTo ?? null,
     ],
   );
-  if (input.threadId) {
-    await q(`update threads set last_event_at = now() where id = $1`, [input.threadId]);
+  if (input.channelId) {
+    await q(`update channels set last_event_at = now() where id = $1`, [input.channelId]);
   }
   return row;
 }
 
-export async function threadEvents(
+export async function channelEvents(
   workspaceId: string,
-  threadId: string,
+  channelId: string,
   opts: { limit?: number; beforeSeq?: string } = {},
 ): Promise<Event[]> {
   const limit = opts.limit ?? 100;
   const rows = await q<Event>(
     `with roots as (${ROOT_CTE})
-     select ${EVENT_COLS}
+     select ${EVENT_COLS}, ${REPLY_STATS}
        from events e
        join actors a on a.id = e.actor_id
        left join roots r on r.rid = e.id
-      where e.workspace_id = $1 and e.thread_id = $2
+      where e.workspace_id = $1 and e.channel_id = $2
         and ${HEAD_ONLY}
+        -- the channel shows top-level messages only; replies live in their
+        -- own thread and would otherwise flood the room
+        and e.reply_to is null
         and ($3::bigint is null or coalesce(r.root_seq, e.seq) < $3::bigint)
       order by coalesce(r.root_seq, e.seq) desc limit $4`,
-    [workspaceId, threadId, opts.beforeSeq ?? null, limit],
+    [workspaceId, channelId, opts.beforeSeq ?? null, limit],
   );
   return rows.reverse();
+}
+
+/** One reply thread: the root message plus its replies, oldest first. */
+export async function threadEvents(
+  workspaceId: string,
+  rootId: string,
+): Promise<{ root: Event | null; replies: Event[] }> {
+  const rows = await q<Event>(
+    `with roots as (${ROOT_CTE})
+     select ${EVENT_COLS}, ${REPLY_STATS}
+       from events e
+       join actors a on a.id = e.actor_id
+       left join roots r on r.rid = e.id
+      where e.workspace_id = $1
+        and (coalesce(r.root_id, e.id) = $2::uuid or e.reply_to = $2::uuid)
+        and ${HEAD_ONLY}
+      -- order by the ROOT's seq, so editing a reply keeps its place in the
+      -- thread rather than moving it to the end
+      order by coalesce(r.root_seq, e.seq)`,
+    [workspaceId, rootId],
+  );
+  const root = rows.find((r) => !r.reply_to) ?? null;
+  return { root, replies: rows.filter((r) => r.reply_to) };
 }
 
 export async function recentEvents(workspaceId: string, limit = 50): Promise<Event[]> {
@@ -157,13 +201,13 @@ export async function recentEvents(workspaceId: string, limit = 50): Promise<Eve
 /* -------------------------------- decisions ------------------------------- */
 
 const DECISION_COLS = `
-  d.id, d.workspace_id, d.thread_id, d.statement, d.rationale, d.alternatives,
+  d.id, d.workspace_id, d.channel_id, d.statement, d.rationale, d.alternatives,
   d.status, d.supersedes_id, d.entities, d.source_event_ids, d.confidence,
   d.decided_by, a.handle as decided_by_handle, d.decided_at`;
 
 export async function createDecision(input: {
   workspaceId: string;
-  threadId: string | null;
+  channelId: string | null;
   statement: string;
   rationale?: string | undefined;
   alternatives: string[];
@@ -176,7 +220,7 @@ export async function createDecision(input: {
 }): Promise<Decision> {
   const row = await one<Decision>(
     `with ins as (
-       insert into decisions (workspace_id, thread_id, statement, rationale, alternatives,
+       insert into decisions (workspace_id, channel_id, statement, rationale, alternatives,
                               status, supersedes_id, entities, source_event_ids, confidence, decided_by)
        values ($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9::uuid[],$10,$11)
        returning *
@@ -184,7 +228,7 @@ export async function createDecision(input: {
      select ${DECISION_COLS} from ins d left join actors a on a.id = d.decided_by`,
     [
       input.workspaceId,
-      input.threadId,
+      input.channelId,
       input.statement,
       input.rationale ?? null,
       JSON.stringify(input.alternatives),
@@ -212,7 +256,7 @@ export async function listDecisions(
   workspaceId: string,
   opts: {
     includeSuperseded?: boolean;
-    threadId?: string | undefined;
+    channelId?: string | undefined;
     path?: string | undefined;
     limit?: number;
   } = {},
@@ -222,13 +266,13 @@ export async function listDecisions(
        from decisions d left join actors a on a.id = d.decided_by
       where d.workspace_id = $1
         and ($2::boolean or d.status in ('accepted','proposed'))
-        and ($3::uuid is null or d.thread_id = $3::uuid)
+        and ($3::uuid is null or d.channel_id = $3::uuid)
         and ($4::text is null or d.entities @> jsonb_build_object('paths', jsonb_build_array($4::text)))
       order by d.decided_at desc limit $5`,
     [
       workspaceId,
       opts.includeSuperseded ?? false,
-      opts.threadId ?? null,
+      opts.channelId ?? null,
       opts.path ?? null,
       opts.limit ?? 50,
     ],
@@ -266,7 +310,7 @@ export async function listConstraints(workspaceId: string, limit = 100) {
 
 export async function createTask(input: {
   workspaceId: string;
-  threadId: string | null;
+  channelId: string | null;
   title: string;
   body?: string | undefined;
   labels: string[];
@@ -274,13 +318,13 @@ export async function createTask(input: {
   createdBy: string;
 }): Promise<Task> {
   return one<Task>(
-    `insert into tasks (workspace_id, thread_id, title, body, labels, assignee_id, created_by)
+    `insert into tasks (workspace_id, channel_id, title, body, labels, assignee_id, created_by)
      values ($1,$2,$3,$4,$5::text[],$6,$7)
-     returning id, workspace_id, thread_id, title, body, status, labels, assignee_id,
+     returning id, workspace_id, channel_id, title, body, status, labels, assignee_id,
                created_at, updated_at`,
     [
       input.workspaceId,
-      input.threadId,
+      input.channelId,
       input.title,
       input.body ?? null,
       input.labels,
@@ -295,7 +339,7 @@ export async function listTasks(
   opts: { status?: string[] | undefined; labels?: string[] | undefined; limit?: number } = {},
 ): Promise<Task[]> {
   return q<Task>(
-    `select id, workspace_id, thread_id, title, body, status, labels, assignee_id,
+    `select id, workspace_id, channel_id, title, body, status, labels, assignee_id,
             created_at, updated_at
        from tasks
       where workspace_id = $1
@@ -319,7 +363,7 @@ export async function updateTask(
        labels  = coalesce($6::text[], labels),
        updated_at = now()
       where workspace_id = $1 and id = $2
-      returning id, workspace_id, thread_id, title, body, status, labels, assignee_id,
+      returning id, workspace_id, channel_id, title, body, status, labels, assignee_id,
                 created_at, updated_at`,
     [workspaceId, taskId, patch.status ?? null, patch.title ?? null, patch.body ?? null, patch.labels ?? null],
   );
@@ -401,15 +445,22 @@ export async function retireProjectLink(workspaceId: string, label: string) {
 /** Returns the head of the chain this event belongs to, with its author — the
  *  only row an edit or delete may target. */
 export async function eventHead(workspaceId: string, eventId: string) {
-  return maybeOne<{ id: string; actor_id: string; kind: string; thread_id: string | null; body: string | null }>(
+  return maybeOne<{
+    id: string;
+    actor_id: string;
+    kind: string;
+    channel_id: string | null;
+    body: string | null;
+    reply_to: string | null;
+  }>(
     `with recursive chain as (
-       select id, revision_of, actor_id, kind, thread_id, body, workspace_id from events
+       select id, revision_of, actor_id, kind, channel_id, body, reply_to, workspace_id from events
         where id = $2 and workspace_id = $1
        union all
-       select e.id, e.revision_of, e.actor_id, e.kind, e.thread_id, e.body, e.workspace_id
+       select e.id, e.revision_of, e.actor_id, e.kind, e.channel_id, e.body, e.reply_to, e.workspace_id
          from events e join chain c on e.revision_of = c.id
      )
-     select id, actor_id, kind, thread_id, body from chain c
+     select id, actor_id, kind, channel_id, body, reply_to from chain c
       where not exists (select 1 from events n where n.revision_of = c.id)
       limit 1`,
     [workspaceId, eventId],
