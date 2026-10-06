@@ -1,32 +1,150 @@
 import { spawn as spawnPty, type IPty } from "node-pty";
-import { BrowserWindow, app, desktopCapturer, ipcMain, session, shell, systemPreferences } from "electron";
+import { BrowserWindow, app, desktopCapturer, dialog, ipcMain, nativeImage, session, shell, systemPreferences } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 import { ClaudeCodeAdapter, DEFAULT_POLICY, type AgentEvent, type Policy } from "./agent.js";
 import { SessionStore, type RunRecord } from "./sessions.js";
 
 const exec = promisify(execFile);
 
-/** The workspace root the terminal opens in. Defaults to the repo this app
- *  lives in, so `claude` picks up its .mcp.json and reaches bulletz. */
-const PROJECT_ROOT = process.env.BULLETZ_PROJECT ?? resolve(__dirname, "..", "..", "..");
+// Before anything reads userData. The default is derived from the package
+// name, which for a scoped workspace package is "@bulletz/desktop" — a nested
+// directory, and "Electron" in the menu bar.
+app.setName("Bulletz");
+
+/**
+ * The folder the terminal and the agent work in.
+ *
+ * Running from source this is the repo, so `claude` picks up its .mcp.json and
+ * reaches Bulletz. A packaged app has no repo — resolving upward from __dirname
+ * lands *inside the .app bundle*, which is read-only and not anybody's project
+ * — so an installed copy has to be told which folder to work in, and remembers
+ * it. Until it is told, home is the only safe guess.
+ */
+const projectFile = () => join(app.getPath("userData"), "project.json");
+
+function storedProject(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(projectFile(), "utf8")) as { dir?: string };
+    return typeof raw.dir === "string" && raw.dir && existsSync(raw.dir) ? raw.dir : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeProject(dir: string | null) {
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(projectFile(), JSON.stringify({ dir }, null, 2));
+}
+
+function projectRoot(): string {
+  const chosen = storedProject();
+  if (chosen) return chosen;
+  if (process.env.BULLETZ_PROJECT) return process.env.BULLETZ_PROJECT;
+  // Unpackaged, __dirname is packages/desktop/dist and the repo is three up.
+  if (!app.isPackaged) return resolve(__dirname, "..", "..", "..");
+  return app.getPath("home");
+}
+
+/** Icon assets live beside the compiled main, so they survive packaging.
+ *  .icns is what macOS wants; the PNG is for Windows, Linux, and the dock
+ *  override below. */
+const ASSETS = join(__dirname, "..", "assets");
+/** Our version, not the Electron shell's — app.getVersion() falls back to the
+ *  bundle's CFBundleShortVersionString when running from source. */
+const APP_VERSION = (() => {
+  try {
+    return (
+      JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { version?: string }
+    ).version ?? app.getVersion();
+  } catch {
+    return app.getVersion();
+  }
+})();
+const ICON_PNG = join(ASSETS, "icon.png");
+/** Unused at runtime — nativeImage cannot read .icns. It exists for the
+ *  packaging step, which embeds it in the macOS bundle's Info.plist. */
+export const ICON_ICNS = join(ASSETS, "icon.icns");
 const DEV_URL = process.env.BULLETZ_DEV_URL;
+
+/** The built web UI. Packaged, electron-builder copies packages/web/dist into
+ *  Contents/Resources/web; from source it is still in the repo. This
+ *  deliberately does NOT go through projectRoot(): the renderer ships with the
+ *  app and has nothing to do with whichever folder the user works in. */
+const RENDERER_HTML = app.isPackaged
+  ? join(process.resourcesPath, "web", "index.html")
+  : join(resolve(__dirname, "..", "..", ".."), "packages", "web", "dist", "index.html");
 
 /** Read packages/web/.env.local so a dev terminal inherits the same token the
  *  UI uses — that is what makes `claude` in this pane see the workspace. */
 function projectEnv(): Record<string, string> {
   const out: Record<string, string> = {};
-  const envFile = join(PROJECT_ROOT, "packages", "web", ".env.local");
-  if (!existsSync(envFile)) return out;
-  for (const line of readFileSync(envFile, "utf8").split("\n")) {
-    const m = /^\s*(?:VITE_)?(BULLETZ_[A-Z_]+)\s*=\s*(.*)\s*$/.exec(line);
-    if (m?.[1] && m[2]) out[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  // Dev convenience only: a packaged app has no repo to read this from.
+  const envFile = app.isPackaged
+    ? ""
+    : join(resolve(__dirname, "..", "..", ".."), "packages", "web", ".env.local");
+  if (envFile && existsSync(envFile)) {
+    for (const line of readFileSync(envFile, "utf8").split("\n")) {
+      const m = /^\s*(?:VITE_)?(BULLETZ_[A-Z_]+)\s*=\s*(.*)\s*$/.exec(line);
+      if (m?.[1] && m[2]) out[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
   }
+  // The window's choice wins over the checked-in dev defaults: the agent and
+  // the MCP bridge must talk to the SAME server the UI is signed in to, or the
+  // agent reads one workspace and posts into another.
+  const chosen = storedServer();
+  if (chosen) out["BULLETZ_SERVER_URL"] = chosen;
+  // Likewise the agent credential. Without this an installed copy has no way
+  // to get one at all — .env.local is a file in a repo it does not have — and
+  // chat-triggered runs fail silently with nothing to post under.
+  const agentToken = storedAgentToken();
+  if (agentToken) out["BULLETZ_AGENT_TOKEN"] = agentToken;
   return out;
+}
+
+/**
+ * The agent's own credential, kept beside the other machine-local state.
+ *
+ * It is deliberately NOT the human's token: the agent posts under its own
+ * actor, and falling back to a person's token is the impersonation the whole
+ * actor model exists to prevent. Onboarding mints it; this is where it lands.
+ */
+const agentTokenFile = () => join(app.getPath("userData"), "agent-token.json");
+
+function storedAgentToken(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(agentTokenFile(), "utf8")) as { token?: string };
+    return typeof raw.token === "string" && raw.token ? raw.token : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeAgentToken(token: string | null) {
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(agentTokenFile(), JSON.stringify({ token }, null, 2), { mode: 0o600 });
+}
+
+/** The server URL the renderer settled on, persisted outside the project tree
+ *  so it survives a packaged build that has no .env.local to read. */
+const serverFile = () => join(app.getPath("userData"), "server.json");
+
+function storedServer(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(serverFile(), "utf8")) as { url?: string };
+    return typeof raw.url === "string" && raw.url ? raw.url : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeServer(url: string | null) {
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(serverFile(), JSON.stringify({ url }, null, 2));
 }
 
 
@@ -110,6 +228,72 @@ async function postToChannel(
   }
 }
 
+/** macOS reads the icon from the bundle's Info.plist, which only exists once
+ *  the app is packaged. Running from source there is no bundle, so the dock
+ *  shows Electron's own atom unless it is set explicitly at runtime. */
+/** Every userData directory this app has used before the current one.
+ *  Each rename of the app moves the directory, and anything already written
+ *  there — the agent policy, the private session log — would otherwise look
+ *  like a factory reset. */
+const LEGACY_USER_DATA = [
+  join("@bulletz", "desktop"), // derived from the scoped package name
+  "bulletz", // before the product name was capitalised
+];
+const CARRIED_FILES = [
+  "agent-policy.json",
+  "agent-sessions.jsonl",
+  "server.json",
+  "project.json",
+  "agent-token.json",
+];
+
+function migrateUserData() {
+  const now = app.getPath("userData");
+  for (const legacy of LEGACY_USER_DATA) {
+    const old = join(dirname(now), legacy);
+    if (old === now || !existsSync(old)) continue;
+    mkdirSync(now, { recursive: true });
+    for (const name of CARRIED_FILES) {
+      const from = join(old, name);
+      const to = join(now, name);
+      // On a case-insensitive volume "bulletz" and "Bulletz" are the same
+      // directory, so `to` already exists and this correctly does nothing
+      // rather than copying a file over itself.
+      if (!existsSync(from) || existsSync(to)) continue;
+      try {
+        copyFileSync(from, to);
+        console.log(`migrated ${name} from ${legacy}`);
+      } catch {
+        /* a failed copy is not a reason to refuse to start */
+      }
+    }
+  }
+}
+
+function applyAppIdentity() {
+  if (process.platform !== "darwin" || !app.dock) return;
+
+  // The About panel takes its text from the bundle unless told otherwise, and
+  // running from source that bundle is Electron's — so without this it reports
+  // Electron's version number as the app's.
+  app.setAboutPanelOptions({
+    applicationName: "Bulletz",
+    applicationVersion: APP_VERSION,
+    version: "",
+    copyright: `© ${new Date().getFullYear()} Bulletz`,
+  });
+  try {
+    const icon = nativeImage.createFromPath(ICON_PNG);
+    if (icon.isEmpty()) {
+      console.warn(`dock icon did not load from ${ICON_PNG}`);
+      return;
+    }
+    app.dock.setIcon(icon);
+  } catch {
+    /* a missing icon is not worth refusing to start over */
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -118,12 +302,19 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: "#0d1017",
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 11 },
+    icon: ICON_PNG,
+    // The lights are 12px tall in a 38px title bar, so (38-12)/2 = 13 centres
+    // them on the same line as the mark and the nav.
+    trafficLightPosition: { x: 14, y: 13 },
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-sandbox: false,
+      sandbox: false,
+      // Handed over at launch, synchronously, because the renderer has to know
+      // which server it belongs to BEFORE its first request — and a packaged
+      // app loads over file://, where there is no origin to infer it from.
+      additionalArguments: [`--bulletz-server=${storedServer() ?? ""}`],
     },
   });
 
@@ -134,7 +325,7 @@ sandbox: false,
   });
 
   if (DEV_URL) void win.loadURL(DEV_URL);
-  else void win.loadFile(join(PROJECT_ROOT, "packages", "web", "dist", "index.html"));
+  else void win.loadFile(RENDERER_HTML);
 
   // macOS hides the traffic lights in fullscreen, so the space the title bar
   // reserves for them becomes dead space. Tell the renderer which it is.
@@ -156,6 +347,9 @@ sandbox: false,
 }
 
 app.whenReady().then(() => {
+  migrateUserData();
+  applyAppIdentity();
+
   // Screen sharing: getDisplayMedia() has no picker in Electron, so the app
   // supplies the source. We hand the renderer the list and let the person
   // choose, rather than silently granting the whole screen.
@@ -193,7 +387,7 @@ app.whenReady().then(() => {
         /* pty gone between checks */
       }
       return {
-        cwd: PROJECT_ROOT,
+        cwd: projectRoot(),
         shell: process.env.SHELL ?? "/bin/zsh",
         replay: existing.buffer.join(""),
         reattached: true,
@@ -205,13 +399,13 @@ app.whenReady().then(() => {
       name: "xterm-256color",
       cols: cols || 80,
       rows: rows || 24,
-      cwd: PROJECT_ROOT,
+      cwd: projectRoot(),
       env: {
         ...(process.env as Record<string, string>),
         // `claude` started in this pane is an agent too, so it posts as one.
         ...agentEnv(),
         TERM: "xterm-256color",
-        BULLETZ_PROJECT: PROJECT_ROOT,
+        BULLETZ_PROJECT: projectRoot(),
       },
     });
 
@@ -227,7 +421,7 @@ app.whenReady().then(() => {
     });
 
     terminals.set(id, term);
-    return { cwd: PROJECT_ROOT, shell: shellPath, replay: "", reattached: false };
+    return { cwd: projectRoot(), shell: shellPath, replay: "", reattached: false };
   });
 
   ipcMain.on("term:write", (_e, { id, data }: { id: string; data: string }) => {
@@ -251,9 +445,9 @@ app.whenReady().then(() => {
   /* -------------------------- agent adapter --------------------------- */
 
   const adapter = new ClaudeCodeAdapter({
-    cwd: PROJECT_ROOT,
+    cwd: projectRoot(),
     env: agentEnv(),
-    mcpConfig: join(PROJECT_ROOT, ".mcp.json"),
+    mcpConfig: join(projectRoot(), ".mcp.json"),
     // Carry each channel's claude session across app restarts, so a channel
     // keeps one continuous conversation instead of meeting a stranger.
     resumeSessions: sessions.latestSessions(),
@@ -302,6 +496,44 @@ app.whenReady().then(() => {
       // silently looks to the room like nobody ever picked the task up.
       if (e.type === "error") void postToChannel(channelId, "agent_error", e.message);
     },
+  });
+
+  // The renderer owns the choice (it is the thing that can actually probe the
+  // address); main owns persisting it, because the agent and the MCP bridge
+  // run here and need the same answer.
+  // Onboarding mints the agent credential in the renderer; it has to reach
+  // main, which is where the agent and the MCP bridge actually run.
+  ipcMain.handle("agent:token", (_e, token: unknown) => {
+    if (token === undefined) return storedAgentToken() !== null;
+    storeAgentToken(typeof token === "string" && token ? token : null);
+    return storedAgentToken() !== null;
+  });
+
+  ipcMain.handle("project:get", () => ({
+    dir: projectRoot(),
+    chosen: storedProject() !== null,
+    packaged: app.isPackaged,
+  }));
+  ipcMain.handle("project:choose", async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = win
+      ? await dialog.showOpenDialog(win, {
+          title: "Choose the folder Bulletz should work in",
+          properties: ["openDirectory", "createDirectory"],
+          defaultPath: projectRoot(),
+        })
+      : await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+    if (res.canceled || !res.filePaths[0]) return { dir: projectRoot(), changed: false };
+    storeProject(res.filePaths[0]);
+    // Existing shells keep their old cwd; a pty cannot be moved. New ones pick
+    // the change up, and the UI says so.
+    return { dir: res.filePaths[0], changed: true };
+  });
+
+  ipcMain.handle("server:get", () => storedServer());
+  ipcMain.handle("server:set", (_e, url: unknown) => {
+    storeServer(typeof url === "string" && url ? url : null);
+    return storedServer();
   });
 
   ipcMain.handle("agent:policy", (_e, patch?: Partial<Policy>) => {
@@ -423,7 +655,7 @@ app.whenReady().then(() => {
   ipcMain.handle("local:status", async () => {
     const git = async (args: string[]) => {
       try {
-        const { stdout } = await exec("git", args, { cwd: PROJECT_ROOT });
+        const { stdout } = await exec("git", args, { cwd: projectRoot() });
         return stdout.trim();
       } catch {
         return "";
@@ -436,7 +668,7 @@ app.whenReady().then(() => {
     return {
       branch: branch || null,
       dirty_files: status ? status.split("\n").filter(Boolean).length : 0,
-      cwd: PROJECT_ROOT.replace(homedir(), "~"),
+      cwd: projectRoot().replace(homedir(), "~"),
       machine: process.env.HOSTNAME ?? process.env.USER ?? "local",
     };
   });

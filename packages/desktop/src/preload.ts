@@ -2,7 +2,13 @@ import { contextBridge, ipcRenderer } from "electron";
 
 /** The only surface the renderer gets. contextIsolation is on and
  *  nodeIntegration is off, so the UI can never touch Node directly. */
+/** Main's record of which server this install belongs to, read from the
+ *  launch arguments so it is available synchronously on first paint. */
+const initialServer =
+  process.argv.find((a) => a.startsWith("--bulletz-server="))?.slice("--bulletz-server=".length) || null;
+
 contextBridge.exposeInMainWorld("bulletz", {
+  initialServer,
   isDesktop: true,
   term: {
     spawn: (id: string, cols: number, rows: number) =>
@@ -22,7 +28,20 @@ contextBridge.exposeInMainWorld("bulletz", {
       return () => ipcRenderer.removeListener("term:exit", h);
     },
   },
+  server: {
+    get: () => ipcRenderer.invoke("server:get") as Promise<string | null>,
+    set: (url: string | null) => ipcRenderer.invoke("server:set", url) as Promise<string | null>,
+  },
+  project: {
+    get: () =>
+      ipcRenderer.invoke("project:get") as Promise<{ dir: string; chosen: boolean; packaged: boolean }>,
+    choose: () =>
+      ipcRenderer.invoke("project:choose") as Promise<{ dir: string; changed: boolean }>,
+  },
   agent: {
+    setToken: (token: string | null) =>
+      ipcRenderer.invoke("agent:token", token) as Promise<boolean>,
+    hasToken: () => ipcRenderer.invoke("agent:token") as Promise<boolean>,
     run: (channelId: string, prompt: string, byOwner: boolean, actor?: { id: string; handle: string }) =>
       ipcRenderer.invoke("agent:run", {
         channelId,

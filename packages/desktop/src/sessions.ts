@@ -12,7 +12,7 @@ import type { AgentEvent } from "./agent.js";
  */
 export type RunRecord = {
   id: string;
-  /** The bulletz actor who started the run. A transcript belongs to the person
+  /** The Bulletz actor who started the run. A transcript belongs to the person
    *  who asked for it, not to whoever next opens the app on this machine. */
   actorId: string | null;
   actorHandle: string | null;

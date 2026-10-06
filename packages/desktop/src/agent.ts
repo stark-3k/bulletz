@@ -136,7 +136,7 @@ export class ClaudeCodeAdapter {
       ...(trusted ? [] : ["--restricted"]),
       "--append-system-prompt",
       [
-        "You are connected to a bulletz workspace over MCP. Call context_pack before non-trivial work.",
+        "You are connected to a Bulletz workspace over MCP. Call context_pack before non-trivial work.",
         // Working out loud is private; reporting is a deliberate act.
       // The split is process vs. result: HOW you worked is private, WHAT you
       // concluded is the reply to a question asked in a public room. Suppress

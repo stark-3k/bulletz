@@ -7,3 +7,6 @@ out/
 
 # web dev env
 packages/web/.env.local
+
+# electron-builder output
+packages/desktop/release/
