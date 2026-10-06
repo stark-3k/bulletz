@@ -679,7 +679,7 @@ function Workspace({
 
         <div className="pane mem-pane">
           <div className="pane-head">
-            {memOpen && "Project memory"}
+            {memOpen && <span className="mem-label-text">Project memory</span>}
             <button
               className="icon-btn"
               title={memOpen ? "Collapse" : "Expand project memory"}

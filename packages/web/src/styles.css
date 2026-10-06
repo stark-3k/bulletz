@@ -36,7 +36,15 @@
 
 * { box-sizing: border-box; }
 
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  /* Height was constrained but width was not, so the root grew to whatever the
+     widest descendant demanded — a long message or the terminal canvas — and
+     the right-hand panes were pushed off the window entirely. */
+  width: 100%;
+  overflow: hidden;
+}
 
 body {
   background: var(--bg);
@@ -49,7 +57,15 @@ button { font: inherit; cursor: pointer; }
 
 /* ------------------------------- shell ------------------------------- */
 
-.app { display: grid; grid-template-rows: 38px minmax(0, 1fr) auto; height: 100%; }
+.app {
+  display: grid;
+  grid-template-rows: 38px minmax(0, 1fr) auto;
+  /* An implicit grid column is sized to max-content, so the terminal canvas —
+     which keeps whatever width it was last fitted to — dragged every row out
+     to 1920px inside a 900px window. Naming a shrinkable column fixes it. */
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%; width: 100%; min-width: 0; overflow: hidden;
+}
 
 .titlebar {
   display: flex; align-items: center; gap: 12px;
@@ -80,9 +96,10 @@ button { font: inherit; cursor: pointer; }
 .conn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
 .conn-dot.on { background: var(--decision); box-shadow: 0 0 7px var(--decision); }
 
-.panes { display: grid; grid-template-columns: 236px 1fr 330px; min-height: 0; overflow: hidden; }
+.panes { display: grid; grid-template-columns: 236px minmax(0, 1fr) 330px; min-height: 0; overflow: hidden; }
 .pane { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .pane + .pane { border-left: 1px solid var(--line); }
+.pane { min-width: 0; }
 
 .pane-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -143,7 +160,7 @@ button { font: inherit; cursor: pointer; }
   background: #24242a; color: var(--accent);
 }
 .avatar.agent { background: #221c2e; color: var(--agent); }
-.msg-main { min-width: 0; flex: 1; }
+.msg-main { min-width: 0; flex: 1; max-width: 100%; }
 .msg-head { display: flex; align-items: baseline; gap: 8px; }
 .msg-who { font-weight: 600; font-size: 12.5px; }
 .msg-who.agent { color: var(--agent); }
@@ -153,7 +170,10 @@ button { font: inherit; cursor: pointer; }
   background: #221c2e; color: var(--agent); border: 1px solid #332a45;
 }
 .msg-time { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); }
-.msg-body { white-space: pre-wrap; overflow-wrap: break-word; font-size: 13px; }
+.msg-body {
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  font-size: 13px; min-width: 0;
+}
 .msg-refs {
   margin-top: 4px; display: flex; gap: 5px; flex-wrap: wrap;
   font-family: var(--mono); font-size: 10.5px;
@@ -308,7 +328,7 @@ button { font: inherit; cursor: pointer; }
 .term-resizer:hover, .term-resizer.dragging { background: var(--accent); }
 
 .term-panel {
-  display: flex; flex-direction: column; min-height: 0;
+  display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
   background: var(--bg); border-top: 1px solid var(--line);
 }
 
@@ -321,7 +341,7 @@ button { font: inherit; cursor: pointer; }
 .term-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--decision); flex: none; }
 .term-cwd { color: var(--fg-dim); }
 .term-exit { margin-left: auto; color: var(--danger); }
-.term-host { flex: 1; min-height: 0; padding: 6px 10px; overflow: hidden; }
+.term-host { flex: 1; min-height: 0; min-width: 0; padding: 6px 10px; overflow: hidden; }
 .term-host .xterm { height: 100%; }
 .term-host .xterm-viewport { overflow-y: auto !important; background: transparent !important; }
 
@@ -466,8 +486,8 @@ button { font: inherit; cursor: pointer; }
 
 /* -------------------------------- apps --------------------------------- */
 
-.panes-apps { grid-template-columns: 1fr 330px; }
-.apps { display: grid; grid-template-columns: 210px 1fr; min-height: 0; overflow: hidden; }
+.panes-apps { grid-template-columns: minmax(0, 1fr) 330px; }
+.apps { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .apps-rail { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
 .apps-canvas { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 
@@ -594,8 +614,8 @@ button { font: inherit; cursor: pointer; }
 .chev.open { transform: rotate(90deg); }
 .mem-toggle .mem-count { margin-left: auto; }
 
-.panes.mem-collapsed { grid-template-columns: 236px 1fr 34px; }
-.panes.panes-apps.mem-collapsed { grid-template-columns: 1fr 34px; }
+.panes.mem-collapsed { grid-template-columns: 236px minmax(0, 1fr) 34px; }
+.panes.panes-apps.mem-collapsed { grid-template-columns: minmax(0, 1fr) 34px; }
 .mem-pane { overflow: hidden; }
 .mem-collapsed .mem-pane .pane-head { padding: 9px 7px; justify-content: center; }
 
@@ -728,9 +748,9 @@ button { font: inherit; cursor: pointer; }
   border-left: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
-.panes:has(.thread-pane) { grid-template-columns: 236px 1fr 360px 330px; }
-.panes.mem-collapsed:has(.thread-pane) { grid-template-columns: 236px 1fr 360px 34px; }
-.panes.panes-apps:has(.thread-pane) { grid-template-columns: 1fr 360px 330px; }
+.panes:has(.thread-pane) { grid-template-columns: 236px minmax(0, 1fr) 360px 330px; }
+.panes.mem-collapsed:has(.thread-pane) { grid-template-columns: 236px minmax(0, 1fr) 360px 34px; }
+.panes.panes-apps:has(.thread-pane) { grid-template-columns: minmax(0, 1fr) 360px 330px; }
 
 .thread-divider {
   display: flex; align-items: center; gap: 9px;
@@ -811,7 +831,7 @@ button { font: inherit; cursor: pointer; }
 /* ------------------- agent history, inside the dock -------------------- */
 
 .sessions { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.sessions-split { display: grid; grid-template-columns: 300px 1fr; min-height: 0; flex: 1; }
+.sessions-split { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; flex: 1; }
 .sessions-list { overflow-y: auto; border-right: 1px solid var(--line); }
 .session-row {
   display: block; width: 100%; text-align: left; background: none; border: 0;
@@ -846,7 +866,7 @@ button { font: inherit; cursor: pointer; }
 .session-events { padding: 10px 16px 18px; }
 
 /* The dock splits into a run list and the selected transcript. */
-.agent-split { display: grid; grid-template-columns: 230px 1fr; min-height: 0; flex: 1; }
+.agent-split { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 0; flex: 1; }
 .agent-history { overflow-y: auto; border-right: 1px solid var(--line); min-height: 0; }
 .agent-hist-row {
   display: block; width: 100%; text-align: left; background: none; border: 0;
@@ -1089,4 +1109,44 @@ button { font: inherit; cursor: pointer; }
   font-family: var(--mono); font-size: 10.5px; color: var(--fg-dim);
   background: var(--bg-input); border: 1px solid var(--line); border-radius: 6px;
   padding: 10px; margin: 7px 0; overflow-x: auto; white-space: pre;
+}
+
+
+/* ------------------------------ narrow windows -------------------------- */
+/* Fixed side columns are right at a desk and wrong on a laptop half-screen.
+   The side panes give way before the conversation does, since the
+   conversation is the thing you came for. */
+
+@media (max-width: 1400px) {
+  .panes:has(.thread-pane) { grid-template-columns: 236px minmax(0, 1fr) 320px 34px; }
+  .panes:has(.thread-pane) .mem-pane .pane-body { display: none; }
+  .panes:has(.thread-pane) .mem-pane .mem-label-text { display: none; }
+  .panes:has(.thread-pane) .mem-pane .pane-head { padding: 9px 7px; justify-content: center; }
+}
+
+@media (max-width: 1150px) {
+  /* Project memory folds to its strip; the toggle still opens it. */
+  .panes { grid-template-columns: 236px minmax(0, 1fr) 34px; }
+  .panes .mem-pane .pane-body { display: none; }
+  /* The strip is 34px wide, so the heading has nowhere to go — only the
+     toggle stays. */
+  .panes .mem-pane .mem-label-text { display: none; }
+  .panes .mem-pane .pane-head { padding: 9px 7px; justify-content: center; }
+  .panes-apps { grid-template-columns: minmax(0, 1fr) 34px; }
+  .panes:has(.thread-pane) { grid-template-columns: 200px minmax(0, 1fr) 300px; }
+  .panes:has(.thread-pane) .mem-pane { display: none; }
+}
+
+@media (max-width: 920px) {
+  .panes { grid-template-columns: 180px minmax(0, 1fr) 34px; }
+  .apps { grid-template-columns: 170px minmax(0, 1fr); }
+  .agent-split, .sessions-split { grid-template-columns: 170px minmax(0, 1fr); }
+  .board-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .titlebar { padding-left: 78px; gap: 8px; }
+}
+
+@media (max-height: 760px) {
+  /* The dock must not eat the conversation on a short window. */
+  .term-panel { max-height: 38vh; }
+  .onboard { max-height: 34vh; }
 }

@@ -130,6 +130,12 @@ context is a replayable *query* over the log, not a synced copy of it.
 - **Widget refresh never touches a model.** A 30s tick re-invokes the tool
   server-side and pushes rows. If refresh cost an inference the feature would be
   unusable at any scale.
+- **The conversation is the last thing to give way.** Side panes fold before
+  the centre column narrows: project memory becomes a strip under 1150px, the
+  thread pane goes under 1150px, and the dock is capped to a fraction of the
+  viewport on a short window. Every grid column is `minmax(0, 1fr)` rather than
+  `1fr`, because the default refuses to shrink below its content and one wide
+  message is enough to push the right-hand panes off the screen.
 - **Colour means something; chrome does not.** The brand mark is strictly
   monochrome — 197 greys, no chromatic fill anywhere — so the interface follows
   it: surfaces are the logo's own neutral near-blacks, and "active" or
