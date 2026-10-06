@@ -8,7 +8,11 @@ import "@xterm/xterm/css/xterm.css";
 type Bridge = {
   isDesktop: true;
   term: {
-    spawn: (id: string, cols: number, rows: number) => Promise<{ cwd: string; shell: string }>;
+    spawn: (
+      id: string,
+      cols: number,
+      rows: number,
+    ) => Promise<{ cwd: string; shell: string; replay: string; reattached: boolean }>;
     write: (id: string, data: string) => void;
     resize: (id: string, cols: number, rows: number) => void;
     kill: (id: string) => void;
@@ -96,6 +100,7 @@ export function TerminalPane({ id }: { id: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [cwd, setCwd] = useState<string>("");
   const [exited, setExited] = useState<number | null>(null);
+  const [reattached, setReattached] = useState(false);
   const api = bridge();
 
   useEffect(() => {
@@ -124,7 +129,12 @@ export function TerminalPane({ id }: { id: string }) {
     });
 
     void api.term.spawn(id, term.cols, term.rows).then((info) => {
-      if (!disposed) setCwd(info.cwd);
+      if (disposed) return;
+      setCwd(info.cwd);
+      // Hand back the output this view missed, so a reload resumes the session
+      // instead of staring at a blank screen with a live job behind it.
+      if (info.replay) term.write(info.replay);
+      setReattached(info.reattached);
     });
 
     term.onData((d) => api.term.write(id, d));
@@ -144,7 +154,8 @@ export function TerminalPane({ id }: { id: string }) {
       ro.disconnect();
       offData();
       offExit();
-      api.term.kill(id);
+      // Deliberately NOT killing the pty: this view is going away, the shell
+      // is not. It is torn down only on an explicit kill or window close.
       term.dispose();
     };
   }, [api, id]);
@@ -167,6 +178,7 @@ export function TerminalPane({ id }: { id: string }) {
       <div className="term-bar">
         <span className="term-dot" />
         <span className="term-cwd">{cwd || "starting…"}</span>
+        {reattached && <span className="term-reattached">reattached</span>}
         {exited !== null && <span className="term-exit">exited {exited}</span>}
       </div>
       <div className="term-host" ref={host} />

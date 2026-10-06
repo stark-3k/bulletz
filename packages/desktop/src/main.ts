@@ -40,7 +40,24 @@ function agentEnv(): Record<string, string> {
   return agentToken ? { ...env, BULLETZ_TOKEN: agentToken } : env;
 }
 
-const terminals = new Map<string, IPty>();
+/** A pty plus a bounded replay buffer.
+ *
+ *  The renderer can go away at any moment — a reload, a hot update — and the
+ *  shell must not go with it. The pty lives here, and its recent output is kept
+ *  so a reattaching view can be handed the scrollback it missed instead of a
+ *  blank screen and a dead job. */
+type Terminal = { pty: IPty; buffer: string[]; bytes: number };
+const terminals = new Map<string, Terminal>();
+
+const MAX_BUFFER_BYTES = 256 * 1024;
+
+function record(t: Terminal, data: string) {
+  t.buffer.push(data);
+  t.bytes += data.length;
+  while (t.bytes > MAX_BUFFER_BYTES && t.buffer.length > 1) {
+    t.bytes -= t.buffer.shift()!.length;
+  }
+}
 
 /* ----------------------------- agent policy ----------------------------- */
 // Lives on disk, owned by this machine. A teammate's chat message starting a
@@ -117,8 +134,8 @@ sandbox: false,
   else void win.loadFile(join(PROJECT_ROOT, "packages", "web", "dist", "index.html"));
 
   win.on("closed", () => {
-    for (const [id, pty] of terminals) {
-      pty.kill();
+    for (const [id, t] of terminals) {
+      t.pty.kill();
       terminals.delete(id);
     }
   });
@@ -136,7 +153,22 @@ app.whenReady().then(() => {
   /* ------------------------------ terminal ------------------------------ */
 
   ipcMain.handle("term:spawn", (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    terminals.get(id)?.kill();
+    // Reattach rather than respawn. Killing the old pty here is what made every
+    // reload a fresh shell with the previous job dead.
+    const existing = terminals.get(id);
+    if (existing) {
+      try {
+        existing.pty.resize(Math.max(cols || 80, 2), Math.max(rows || 24, 2));
+      } catch {
+        /* pty gone between checks */
+      }
+      return {
+        cwd: PROJECT_ROOT,
+        shell: process.env.SHELL ?? "/bin/zsh",
+        replay: existing.buffer.join(""),
+        reattached: true,
+      };
+    }
 
     const shellPath = process.env.SHELL ?? "/bin/zsh";
     const pty = spawnPty(shellPath, ["-l"], {
@@ -153,7 +185,10 @@ app.whenReady().then(() => {
       },
     });
 
+    const term: Terminal = { pty, buffer: [], bytes: 0 };
+
     pty.onData((data) => {
+      record(term, data);
       if (!win.isDestroyed()) win.webContents.send("term:data", { id, data });
     });
     pty.onExit(({ exitCode }) => {
@@ -161,24 +196,25 @@ app.whenReady().then(() => {
       if (!win.isDestroyed()) win.webContents.send("term:exit", { id, exitCode });
     });
 
-    terminals.set(id, pty);
-    return { cwd: PROJECT_ROOT, shell: shellPath };
+    terminals.set(id, term);
+    return { cwd: PROJECT_ROOT, shell: shellPath, replay: "", reattached: false };
   });
 
   ipcMain.on("term:write", (_e, { id, data }: { id: string; data: string }) => {
-    terminals.get(id)?.write(data);
+    terminals.get(id)?.pty.write(data);
   });
 
   ipcMain.on("term:resize", (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
     try {
-      terminals.get(id)?.resize(Math.max(cols, 2), Math.max(rows, 2));
+      terminals.get(id)?.pty.resize(Math.max(cols, 2), Math.max(rows, 2));
     } catch {
       /* pty already gone */
     }
   });
 
+  // Only an explicit kill ends a shell. A view going away is not one.
   ipcMain.on("term:kill", (_e, { id }: { id: string }) => {
-    terminals.get(id)?.kill();
+    terminals.get(id)?.pty.kill();
     terminals.delete(id);
   });
 

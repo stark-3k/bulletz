@@ -122,6 +122,40 @@ export async function widgetRoutes(app: FastifyInstance) {
     return { tool };
   });
 
+  /** Delete a tool definition. Unlike a message or a decision, a tool is not
+   *  a record of what happened — every invocation is already an event in the
+   *  log — so removing the definition loses no history. Humans only, same rule
+   *  that gates activation. */
+  app.delete("/tools/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    if (req.actor.kind !== "human") {
+      return reply.code(403).send({ error: "only a human actor can delete a tool" });
+    }
+    const used = await q<{ name: string }>(
+      `select name from widgets where workspace_id = $1 and tool_id = $2`,
+      [req.actor.workspace_id, id],
+    );
+    if (used.length) {
+      return reply
+        .code(409)
+        .send({ error: `in use by widget(s): ${used.map((w) => w.name).join(", ")}` });
+    }
+    const tool = await maybeOne<{ name: string }>(
+      `delete from tools where workspace_id = $1 and id = $2 returning name`,
+      [req.actor.workspace_id, id],
+    );
+    if (!tool) return reply.code(404).send({ error: "tool not found" });
+    const event = await appendEvent({
+      workspaceId: req.actor.workspace_id,
+      channelId: null,
+      actorId: req.actor.id,
+      kind: "tool_deleted",
+      body: tool.name,
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    return { deleted: tool.name };
+  });
+
   app.post("/tools/:id/invoke", async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const args = z.record(z.unknown()).default({}).parse(req.body ?? {});

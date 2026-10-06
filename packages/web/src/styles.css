@@ -854,3 +854,8 @@ button { font: inherit; cursor: pointer; }
   background: var(--bg-input); border: 1px solid var(--line);
   border-radius: 4px; padding: 1px 6px; user-select: all;
 }
+
+.term-reattached {
+  font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}

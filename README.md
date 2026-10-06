@@ -99,9 +99,11 @@ context is a replayable *query* over the log, not a synced copy of it.
   desktop app, defaults to OFF, defaults to owner-only, carries a per-turn
   dollar cap, and grants an explicit tool allowlist (workspace memory plus
   read-only code access — no Bash, Write or Edit until you widen it).
-- **The terminal is workbench-level, never inside a surface.** Unmounting it
-  kills its pty, which takes any running job with it, so it lives outside the
-  Chat/Apps switch and spans the window like VS Code's panel.
+- **The terminal outlives its view.** The pty and a bounded replay buffer live
+  in the main process, so a reload reattaches to the same shell and is handed
+  the scrollback it missed. A view going away is not a reason to kill a shell;
+  only an explicit kill or closing the window is. It is also workbench-level,
+  outside the Chat/Apps switch, for the same reason.
 - **Two surfaces, one state.** Chat is the narrative; Apps is the workspace.
   A widget inline in a thread is an attachment; the same widget in Apps gets
   the whole canvas. Built-in apps (task board, registry) sit beside
