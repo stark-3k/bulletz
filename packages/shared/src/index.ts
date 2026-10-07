@@ -238,6 +238,25 @@ export type PresenceInput = z.infer<typeof PresenceInput>;
 
 /* ------------------------------- realtime ------------------------------- */
 
+export const Notification = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(["mention", "reply", "task", "agent", "system"]),
+  title: z.string(),
+  body: z.string().nullable(),
+  channel_id: z.string().uuid().nullable(),
+  event_id: z.string().uuid().nullable(),
+  from_handle: z.string().nullable(),
+  read_at: z.string().nullable(),
+  created_at: z.string(),
+});
+export type Notification = z.infer<typeof Notification>;
+
+export type ChannelUnread = {
+  channel_id: string;
+  unread: number;
+  mentions: number;
+};
+
 export type ServerMessage =
   | { type: "hello"; workspace_id: string; actor: Actor }
   | { type: "event"; event: Event }
@@ -245,5 +264,12 @@ export type ServerMessage =
   | { type: "decision"; decision: Decision }
   | { type: "task"; task: Task }
   | { type: "note"; note: Note }
+  | {
+      type: "notification";
+      /** Fan-out is per recipient; every client in the workspace sees the
+       *  frame, so each must ignore the ones not addressed to it. */
+      actor_id: string;
+      notification: Notification;
+    }
   | { type: "presence"; actor_handle: string; online: boolean }
   | { type: "error"; message: string };

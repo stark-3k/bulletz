@@ -60,6 +60,7 @@ The full design rationale — every rule and the reasoning behind it — is in
 | **Voice & screen share** | WebRTC full mesh, server relays signalling only |
 | **Custom widgets** | Agent-authored HTML apps, embedded in chat or pinned to a board |
 | **Auth** | Roles, invites, revocable sessions and API tokens, admin-issued resets |
+| **Notifications** | Mentions, replies, task assignments and agent posts — in-app, as OS notifications on desktop, with per-kind preferences and per-channel mute |
 
 ## Quick start
 

@@ -3,10 +3,11 @@ import type { Api, Member, SessionRow, TokenRow } from "./api.ts";
 import { resolveServer } from "./server.ts";
 import { bridge } from "./Terminal.tsx";
 
-type Tab = "account" | "security" | "tokens";
+type Tab = "account" | "notifications" | "security" | "tokens";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "account", label: "Account" },
+  { id: "notifications", label: "Notifications" },
   { id: "security", label: "Security" },
   { id: "tokens", label: "API tokens" },
 ];
@@ -87,6 +88,7 @@ export function Settings({
             {err && <div className="form-err">{err}</div>}
             {note && <div className="form-note">{note}</div>}
             {tab === "account" && <Account api={api} me={me} run={run} />}
+            {tab === "notifications" && <Notifications api={api} run={run} />}
             {tab === "security" && <Security api={api} run={run} onSignOut={onSignOut} />}
             {tab === "tokens" && <Tokens api={api} run={run} />}
           </div>
@@ -411,4 +413,115 @@ function ago(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+
+const KINDS: { id: string; label: string; hint: string }[] = [
+  { id: "mention", label: "Mentions", hint: "Someone writes @your-handle" },
+  { id: "reply", label: "Replies", hint: "Someone replies to a message you wrote" },
+  { id: "task", label: "Tasks", hint: "A task is assigned to you" },
+  { id: "agent", label: "Agent activity", hint: "Your agent posts the result of a run" },
+];
+
+/**
+ * What is worth interrupting someone for.
+ *
+ * There is deliberately no "notify me about everything" switch. A channel
+ * being busy is what the unread count beside its name is for; turning that
+ * into notifications is how people learn to ignore the bell entirely.
+ */
+function Notifications({ api, run }: { api: Api; run: Run }) {
+  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
+  const [muted, setMuted] = useState<string[]>([]);
+  const [channels, setChannels] = useState<{ id: string; title: string }[]>([]);
+  const [desktopOk, setDesktopOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void api.notifyPrefs().then((r) => {
+      setPrefs(r.prefs ?? {});
+      setMuted(r.muted ?? []);
+    });
+    void api.channels().then((r) => setChannels(r.channels.map((c) => ({ id: c.id, title: c.title }))));
+    setDesktopOk(Boolean(bridge()?.notify));
+  }, [api]);
+
+  if (!prefs) return null;
+  // Absent means on, so a new notification kind is opt-out rather than missed.
+  const on = (k: string) => prefs[k] !== false;
+
+  const toggle = (k: string) =>
+    void run(async () => {
+      const next = !on(k);
+      setPrefs((p) => ({ ...(p ?? {}), [k]: next }));
+      await api.setNotifyPrefs({ [k]: next });
+    });
+
+  return (
+    <>
+      <h4>Notify me about</h4>
+      <div className="rows">
+        {KINDS.map((k) => (
+          <div key={k.id} className="rowitem">
+            <div className="rowitem-main">
+              <strong>{k.label}</strong>
+              <span className="muted">{k.hint}</span>
+            </div>
+            <button
+              className={`toggle${on(k.id) ? " on" : ""}`}
+              role="switch"
+              aria-checked={on(k.id)}
+              aria-label={k.label}
+              onClick={() => toggle(k.id)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <p className="muted" style={{ marginTop: 10 }}>
+        A channel simply being busy is not a notification — that is the count beside its name.
+      </p>
+
+      <h4 className="spaced">Desktop notifications</h4>
+      {desktopOk ? (
+        <p className="muted">
+          Shown by the operating system when the app is in the background or you are looking at a
+          different channel. Clicking one opens the message.
+        </p>
+      ) : (
+        <p className="muted">
+          Not available here — the browser tab shows the count in the bell instead. The desktop app
+          can raise system notifications.
+        </p>
+      )}
+
+      <h4 className="spaced">Muted channels</h4>
+      <p className="muted">A muted channel never notifies, even if you are mentioned in it.</p>
+      <div className="rows">
+        {channels.map((c) => {
+          const isMuted = muted.includes(c.id);
+          return (
+            <div key={c.id} className="rowitem">
+              <div className="rowitem-main">
+                <strong>{c.title}</strong>
+              </div>
+              <button
+                className="ghost"
+                onClick={() =>
+                  void run(async () => {
+                    await api.muteChannel(c.id, !isMuted);
+                    setMuted((m) => (isMuted ? m.filter((x) => x !== c.id) : [...m, c.id]));
+                  })
+                }
+              >
+                {isMuted ? "Unmute" : "Mute"}
+              </button>
+            </div>
+          );
+        })}
+        {channels.length === 0 && <p className="muted empty">No channels yet.</p>}
+      </div>
+    </>
+  );
 }

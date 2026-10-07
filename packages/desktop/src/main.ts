@@ -1,5 +1,5 @@
 import { spawn as spawnPty, type IPty } from "node-pty";
-import { BrowserWindow, app, desktopCapturer, dialog, ipcMain, nativeImage, session, shell, systemPreferences } from "electron";
+import { BrowserWindow, Notification, app, desktopCapturer, dialog, ipcMain, nativeImage, session, shell, systemPreferences } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -508,6 +508,43 @@ app.whenReady().then(() => {
     storeAgentToken(typeof token === "string" && token ? token : null);
     return storedAgentToken() !== null;
   });
+
+  /** An OS notification, and the dock badge that goes with it. The renderer
+   *  decides what is worth surfacing; main only knows how to show it. */
+  ipcMain.handle(
+    "notify:show",
+    (_e, n: { title?: unknown; body?: unknown; channelId?: unknown } | undefined) => {
+      if (!Notification.isSupported() || !n || typeof n.title !== "string") return false;
+      const note = new Notification({
+        title: n.title,
+        body: typeof n.body === "string" ? n.body : "",
+        silent: false,
+      });
+      // Clicking it should take you to the thing, not just raise the window.
+      note.on("click", () => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win) return;
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        if (typeof n.channelId === "string") win.webContents.send("notify:open", n.channelId);
+      });
+      note.show();
+      return true;
+    },
+  );
+
+  ipcMain.handle("notify:badge", (_e, count: unknown) => {
+    const n = typeof count === "number" && count > 0 ? count : 0;
+    if (process.platform === "darwin" && app.dock) {
+      app.dock.setBadge(n > 0 ? (n > 99 ? "99+" : String(n)) : "");
+    } else {
+      app.setBadgeCount(n);
+    }
+    return true;
+  });
+
+  ipcMain.handle("app:version", () => APP_VERSION);
 
   ipcMain.handle("project:get", () => ({
     dir: projectRoot(),

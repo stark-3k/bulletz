@@ -23,6 +23,12 @@ type Bridge = {
     get: () => Promise<string | null>;
     set: (url: string | null) => Promise<string | null>;
   };
+  notify?: {
+    show: (n: { title: string; body?: string; channelId?: string }) => Promise<boolean>;
+    badge: (count: number) => Promise<boolean>;
+    onOpen: (cb: (channelId: string) => void) => () => void;
+  };
+  appVersion?: () => Promise<string>;
   project?: {
     get: () => Promise<{ dir: string; chosen: boolean; packaged: boolean }>;
     choose: () => Promise<{ dir: string; changed: boolean }>;

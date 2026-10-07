@@ -11,9 +11,10 @@ import {
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { allow, requireActor } from "../authHook.js";
-import { maybeOne, q } from "../db.js";
+import { maybeOne, one, q } from "../db.js";
 import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
+import * as notify from "../notify.js";
 import { contextPack, renderContextPack, search } from "../search.js";
 import * as voice from "../voice.js";
 import { createHmac } from "node:crypto";
@@ -199,6 +200,21 @@ export async function apiRoutes(app: FastifyInstance) {
       replyTo,
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
+    // After the write, never before: a notification pointing at an event that
+    // failed to commit is worse than a missing one. Fan-out failing must not
+    // fail the message either — the message is the thing that matters.
+    void notify
+      .notifyForEvent({
+        id: event.id,
+        workspace_id: req.actor.workspace_id,
+        channel_id: event.channel_id,
+        actor_id: req.actor.id,
+        kind: event.kind,
+        body: event.body,
+        reply_to: event.reply_to ?? null,
+        revision_of: event.revision_of ?? null,
+      })
+      .catch((err: unknown) => app.log.error({ err }, "notification fan-out failed"));
     return reply.code(201).send({ event });
   });
 
@@ -406,6 +422,16 @@ export async function apiRoutes(app: FastifyInstance) {
     });
     broadcast(req.actor.workspace_id, { type: "task", task });
     broadcast(req.actor.workspace_id, { type: "event", event });
+    void notify
+      .notifyTaskAssigned({
+        workspace_id: req.actor.workspace_id,
+        task_id: task.id,
+        title: task.title,
+        assignee_id: assignee?.id ?? null,
+        by_actor_id: req.actor.id,
+        channel_id: input.channel_id ?? null,
+      })
+      .catch((err: unknown) => app.log.error({ err }, "task notification failed"));
     return reply.code(201).send({ task });
   });
 
@@ -434,6 +460,102 @@ export async function apiRoutes(app: FastifyInstance) {
     broadcast(req.actor.workspace_id, { type: "task", task });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return { task };
+  });
+
+  /* ---------------------------- notifications ---------------------------- */
+
+  app.get("/notifications", async (req) => {
+    const qy = z
+      .object({ unread: z.coerce.boolean().optional(), limit: z.coerce.number().optional() })
+      .parse(req.query ?? {});
+    const [notifications, unread] = await Promise.all([
+      notify.listNotifications(req.actor.id, { unreadOnly: qy.unread, limit: qy.limit }),
+      notify.unreadCount(req.actor.id),
+    ]);
+    return { notifications, unread };
+  });
+
+  app.post("/notifications/read", async (req) => {
+    const body = z
+      .object({ ids: z.array(z.string().uuid()).max(500).optional(), all: z.boolean().optional() })
+      .parse(req.body ?? {});
+    const changed = body.all
+      ? await notify.markAllRead(req.actor.id)
+      : await notify.markRead(req.actor.id, body.ids ?? []);
+    return { changed, unread: await notify.unreadCount(req.actor.id) };
+  });
+
+  /** Per-channel catch-up state, which is a cursor rather than a list — see
+   *  the comment on channel_reads. */
+  app.get("/unread", async (req) => ({
+    channels: await notify.channelUnread(req.actor.workspace_id, req.actor.id),
+  }));
+
+  app.post("/channels/:id/read", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    // events.seq is bigint and is serialised as a string — a number would
+    // silently lose precision past 2^53 — so the cursor arrives as one.
+    const body = z.object({ seq: z.coerce.number().int().nonnegative() }).parse(req.body ?? {});
+    const exists = await maybeOne(
+      `select 1 from channels where id = $1 and workspace_id = $2`,
+      [id, req.actor.workspace_id],
+    );
+    if (!exists) return reply.code(404).send({ error: "channel not found" });
+    await notify.markChannelRead(req.actor.id, id, body.seq);
+    return { ok: true };
+  });
+
+  /* ---------------------------- notify settings --------------------------- */
+
+  app.get("/notify-prefs", async (req) => {
+    const row = await maybeOne<{ notify_prefs: Record<string, unknown> }>(
+      `select notify_prefs from actors where id = $1`,
+      [req.actor.id],
+    );
+    const muted = await q<{ channel_id: string }>(
+      `select channel_id from channel_mutes where actor_id = $1`,
+      [req.actor.id],
+    );
+    return { prefs: row?.notify_prefs ?? {}, muted: muted.map((m) => m.channel_id) };
+  });
+
+  app.patch("/notify-prefs", async (req) => {
+    const body = z
+      .object({
+        mention: z.boolean().optional(),
+        reply: z.boolean().optional(),
+        task: z.boolean().optional(),
+        agent: z.boolean().optional(),
+        system: z.boolean().optional(),
+        desktop: z.boolean().optional(),
+        sound: z.boolean().optional(),
+      })
+      .parse(req.body ?? {});
+    const row = await one<{ notify_prefs: Record<string, unknown> }>(
+      `update actors set notify_prefs = notify_prefs || $2::jsonb
+        where id = $1 returning notify_prefs`,
+      [req.actor.id, JSON.stringify(body)],
+    );
+    return { prefs: row.notify_prefs };
+  });
+
+  app.post("/channels/:id/mute", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const body = z.object({ muted: z.boolean() }).parse(req.body ?? {});
+    const exists = await maybeOne(
+      `select 1 from channels where id = $1 and workspace_id = $2`,
+      [id, req.actor.workspace_id],
+    );
+    if (!exists) return reply.code(404).send({ error: "channel not found" });
+    if (body.muted) {
+      await q(
+        `insert into channel_mutes (actor_id, channel_id) values ($1,$2) on conflict do nothing`,
+        [req.actor.id, id],
+      );
+    } else {
+      await q(`delete from channel_mutes where actor_id = $1 and channel_id = $2`, [req.actor.id, id]);
+    }
+    return { muted: body.muted };
   });
 
   /* -------------------------------- notes -------------------------------- */

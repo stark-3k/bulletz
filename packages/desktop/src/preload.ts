@@ -32,6 +32,17 @@ contextBridge.exposeInMainWorld("bulletz", {
     get: () => ipcRenderer.invoke("server:get") as Promise<string | null>,
     set: (url: string | null) => ipcRenderer.invoke("server:set", url) as Promise<string | null>,
   },
+  notify: {
+    show: (n: { title: string; body?: string; channelId?: string }) =>
+      ipcRenderer.invoke("notify:show", n) as Promise<boolean>,
+    badge: (count: number) => ipcRenderer.invoke("notify:badge", count) as Promise<boolean>,
+    onOpen: (cb: (channelId: string) => void) => {
+      const h = (_e: unknown, channelId: string) => cb(channelId);
+      ipcRenderer.on("notify:open", h);
+      return () => ipcRenderer.removeListener("notify:open", h);
+    },
+  },
+  appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   project: {
     get: () =>
       ipcRenderer.invoke("project:get") as Promise<{ dir: string; chosen: boolean; packaged: boolean }>,

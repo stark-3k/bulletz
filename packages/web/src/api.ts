@@ -1,4 +1,4 @@
-import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
+import type { Decision, Event, Note, Task, Channel, Notification, ChannelUnread } from "@bulletz/shared";
 
 import { resolveServer } from "./server.ts";
 
@@ -165,6 +165,26 @@ export class Api {
   }
 
   logout = () => this.call("POST", "/auth/logout", {});
+
+  /* ----------------------------- notifications ---------------------------- */
+  notifications = (unread = false) =>
+    this.call<{ notifications: Notification[]; unread: number }>(
+      "GET",
+      `/notifications${unread ? "?unread=true" : ""}`,
+    );
+  markRead = (ids: string[]) =>
+    this.call<{ changed: number; unread: number }>("POST", "/notifications/read", { ids });
+  markAllRead = () =>
+    this.call<{ changed: number; unread: number }>("POST", "/notifications/read", { all: true });
+  unread = () => this.call<{ channels: ChannelUnread[] }>("GET", "/unread");
+  readChannel = (id: string, seq: string | number) =>
+    this.call("POST", `/channels/${id}/read`, { seq: String(seq) });
+  muteChannel = (id: string, muted: boolean) =>
+    this.call<{ muted: boolean }>("POST", `/channels/${id}/mute`, { muted });
+  notifyPrefs = () =>
+    this.call<{ prefs: Record<string, boolean>; muted: string[] }>("GET", "/notify-prefs");
+  setNotifyPrefs = (patch: Record<string, boolean>) =>
+    this.call<{ prefs: Record<string, boolean> }>("PATCH", "/notify-prefs", patch);
   updateMe = (patch: { display_name?: string; email?: string | null }) =>
     this.call<{ actor: Member }>("PATCH", "/me", patch);
   changePassword = (current: string | undefined, next: string) =>

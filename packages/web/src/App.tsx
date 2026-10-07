@@ -3,6 +3,8 @@ import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
 import { Settings } from "./Settings.tsx";
 import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
+import { NotificationBell, type LocalNotification } from "./Notifications.tsx";
+import { checkForUpdate, dismissUpdate } from "./updates.ts";
 import { serverSource } from "./server.ts";
 import { Onboarding, type OnboardingState } from "./Onboarding.tsx";
 import {
@@ -370,6 +372,9 @@ function Workspace({
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [liveNotifs, setLiveNotifs] = useState<import("@bulletz/shared").Notification[]>([]);
+  const [localNotifs, setLocalNotifs] = useState<LocalNotification[]>([]);
+  const [unreadByChannel, setUnreadByChannel] = useState<Record<string, { unread: number; mentions: number }>>({});
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [onboardDismissed, setOnboardDismissed] = useState(
     () => localStorage.getItem("bulletz.onboardDone") === "1",
@@ -463,6 +468,32 @@ function Workspace({
         } else if (type === "channel") {
           const th = m["channel"] as unknown as Channel;
           setChannels((prev) => (prev.some((p) => p.id === th.id) ? prev : [th, ...prev]));
+        } else if (type === "notification") {
+          // Every client in the workspace sees the frame; only the addressee
+          // acts on it.
+          if ((m["actor_id"] as string) !== me.id) return;
+          const n = m["notification"] as unknown as import("@bulletz/shared").Notification;
+          setLiveNotifs((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev]));
+          // An OS notification only when the window is not already showing it.
+          if (document.hidden || n.channel_id !== activeRef.current) {
+            void bridge()?.notify?.show({
+              title: n.title,
+              body: n.body ?? "",
+              ...(n.channel_id ? { channelId: n.channel_id } : {}),
+            });
+          }
+          if (n.channel_id && n.channel_id !== activeRef.current) {
+            setUnreadByChannel((prev) => {
+              const cur = prev[n.channel_id!] ?? { unread: 0, mentions: 0 };
+              return {
+                ...prev,
+                [n.channel_id!]: {
+                  unread: cur.unread + 1,
+                  mentions: cur.mentions + (n.kind === "mention" ? 1 : 0),
+                },
+              };
+            });
+          }
         } else if (type === "note") {
           // Merged in place rather than triggering refreshMemory: notes
           // autosave, so a refetch of everything per keystroke-batch would put
@@ -496,6 +527,65 @@ function Workspace({
   // The title bar only steps aside for traffic lights when there are any:
   // the desktop app draws them over the top-left, a browser tab does not, and
   // macOS hides them in fullscreen.
+  /** Per-channel catch-up counts, loaded once and then kept current by the
+   *  socket rather than re-fetched. */
+  const refreshUnread = useCallback(async () => {
+    try {
+      const r = await api.unread();
+      setUnreadByChannel(
+        Object.fromEntries(r.channels.map((c) => [c.channel_id, { unread: c.unread, mentions: c.mentions }])),
+      );
+    } catch {
+      /* the badge is a nicety; a failure here is not worth surfacing */
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void refreshUnread();
+  }, [refreshUnread]);
+
+  /** Opening a channel is what marks it caught up. */
+  useEffect(() => {
+    if (!activeId || events.length === 0) return;
+    const head = events[events.length - 1];
+    if (!head) return;
+    setUnreadByChannel((prev) => {
+      if (!prev[activeId]) return prev;
+      const next = { ...prev };
+      delete next[activeId];
+      return next;
+    });
+    void api.readChannel(activeId, head.seq).catch(() => {});
+  }, [api, activeId, events]);
+
+  /** Is there a newer build? Only meaningful in the desktop app — the web UI
+   *  is whatever the server is serving. */
+  useEffect(() => {
+    const b = bridge();
+    if (!b?.appVersion) return;
+    let live = true;
+    void b
+      .appVersion()
+      .then((v) => checkForUpdate(v))
+      .then((n) => {
+        if (live && n) setLocalNotifs((prev) => (prev.some((p) => p.id === n.id) ? prev : [n, ...prev]));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /** Clicking an OS notification should land on the thing it is about. */
+  useEffect(
+    () =>
+      bridge()?.notify?.onOpen?.((channelId) => {
+        setSurface("chat");
+        setActiveId(channelId);
+      }),
+    [],
+  );
+
   useEffect(() => {
     const b = bridge();
     document.documentElement.classList.toggle("is-desktop", b !== null);
@@ -659,6 +749,19 @@ function Workspace({
           ))}
         </div>
         <span className="sep" />
+        <NotificationBell
+          api={api}
+          live={liveNotifs}
+          localItems={localNotifs}
+          onDismissLocal={(id) => {
+            dismissUpdate(id);
+            setLocalNotifs((prev) => prev.filter((n) => n.id !== id));
+          }}
+          onOpenChannel={(channelId) => {
+            setSurface("chat");
+            setActiveId(channelId);
+          }}
+        />
         <AccountMenu
           me={me}
           connected={connected}
@@ -718,6 +821,8 @@ function Workspace({
                 key={t.id}
                 channel={t}
                 active={t.id === activeId}
+                unread={unreadByChannel[t.id]?.unread ?? 0}
+                mentions={unreadByChannel[t.id]?.mentions ?? 0}
                 onOpen={() => {
                   setActiveId(t.id);
                   setOpenThread(null);
@@ -1345,11 +1450,18 @@ function ProjectCard({ project }: { project: Project | null }) {
 function ThreadRow({
   channel,
   active,
+  unread,
+  mentions,
   onOpen,
   onArchive,
 }: {
   channel: Channel;
   active: boolean;
+  /** How far behind this channel is. A count, not a list — see channel_reads. */
+  unread: number;
+  /** Of which this many name you. A mention outranks volume, so it is shown
+   *  differently rather than folded into the same number. */
+  mentions: number;
   onOpen: () => void;
   onArchive: () => Promise<void>;
 }) {
@@ -1382,7 +1494,14 @@ function ThreadRow({
   return (
     <div className={`channel-row${active ? " active" : ""}${archived ? " archived" : ""}`}>
       <button className="channel" onClick={onOpen}>
-        <div className="channel-title">{channel.title}</div>
+        <div className="channel-title">
+          <span className="channel-name">{channel.title}</span>
+          {unread > 0 && (
+            <span className={`chan-badge${mentions > 0 ? " mention" : ""}`}>
+              {mentions > 0 ? `@${mentions}` : unread > 99 ? "99+" : unread}
+            </span>
+          )}
+        </div>
         <div className="channel-meta">
           {archived ? "archived" : time(channel.last_event_at)}
         </div>
