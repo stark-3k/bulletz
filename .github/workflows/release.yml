@@ -1,0 +1,146 @@
+name: Release
+
+# Builds the desktop binaries and attaches them to a GitHub release.
+#
+# Trigger it by publishing a release (tag it `v0.1.0`, matching the version in
+# packages/desktop/package.json), or run it by hand against an existing tag.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and upload to (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write # to upload assets onto the release
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Windows is built from prebuilt node-pty binaries but has never been run,
+    # so it must not be able to hold up a macOS release.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One runner per architecture rather than cross-building. node-pty
+          # ships prebuilds for both darwin arches, but `npmRebuild: false`
+          # means whatever `npm ci` leaves in build/Release is the host's —
+          # cross-building risks shipping an arm64 binary inside an x64 app,
+          # which fails only at runtime, in someone else's hands.
+          - name: macOS arm64
+            os: macos-14
+            script: package:mac
+            args: --arm64
+            experimental: false
+          - name: macOS x64
+            os: macos-13
+            script: package:mac
+            args: --x64
+            experimental: false
+          - name: Windows x64
+            os: windows-latest
+            script: package:win
+            args: --x64
+            experimental: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The artifact filenames carry the version, so a tag that disagrees with
+      # package.json produces assets named after the wrong release.
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          VERSION=$(node -p "require('./packages/desktop/package.json').version")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match packages/desktop/package.json version $VERSION"
+            echo "Bump the version or retag, so the built filenames match the release."
+            exit 1
+          fi
+          echo "tag $TAG matches version $VERSION"
+
+      - name: Build and package
+        shell: bash
+        env:
+          # There is no Developer ID in CI. Without this, electron-builder goes
+          # looking for a signing identity and fails rather than producing an
+          # ad-hoc signed build.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run ${{ matrix.script }} -w @bulletz/desktop -- ${{ matrix.args }}
+
+      - name: List what was produced
+        shell: bash
+        run: ls -lh packages/desktop/release/ | grep -Ev '^d|^total' || true
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          shopt -s nullglob
+          FILES=(packages/desktop/release/*.dmg packages/desktop/release/*.zip \
+                 packages/desktop/release/*.exe packages/desktop/release/*.blockmap)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::nothing was built"
+            exit 1
+          fi
+          printf 'uploading %s\n' "${FILES[@]}"
+          gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+      # Kept regardless of whether the upload succeeded, so a failed release
+      # still leaves something to inspect.
+      - name: Keep the artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            packages/desktop/release/*.dmg
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.exe
+          if-no-files-found: ignore
+          retention-days: 14
+
+  note:
+    name: Note what is not signed
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say so plainly
+        run: |
+          echo "### Binaries are unsigned" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "macOS builds are ad-hoc signed only, with no Developer ID and no" >> $GITHUB_STEP_SUMMARY
+          echo "notarization. Gatekeeper will refuse them on other machines unless" >> $GITHUB_STEP_SUMMARY
+          echo "the person right-clicks the app and chooses Open." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To sign properly, add \`CSC_LINK\` (base64 .p12) and \`CSC_KEY_PASSWORD\`" >> $GITHUB_STEP_SUMMARY
+          echo "as repository secrets, drop \`CSC_IDENTITY_AUTO_DISCOVERY: false\`, and" >> $GITHUB_STEP_SUMMARY
+          echo "add \`APPLE_ID\`, \`APPLE_APP_SPECIFIC_PASSWORD\` and \`APPLE_TEAM_ID\`" >> $GITHUB_STEP_SUMMARY
+          echo "for notarization." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "There is no Linux target: node-pty ships no Linux prebuilds, and" >> $GITHUB_STEP_SUMMARY
+          echo "\`npmRebuild\` is off, so an AppImage would ship without a working" >> $GITHUB_STEP_SUMMARY
+          echo "terminal." >> $GITHUB_STEP_SUMMARY

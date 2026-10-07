@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: |
+          npm run typecheck
+          npx tsc -p packages/web/tsconfig.json
+          npx tsc -p packages/desktop/tsconfig.json
+
+      - name: Build
+        run: npm run build
+
+      # The packaged app is built from this same output, and Vite loads
+      # .env.local in every mode including production. A credential reaching
+      # the bundle is the one mistake worth failing a build over.
+      - name: Check the bundle carries no credentials
+        run: |
+          npm run build -w @bulletz/web -- --mode package
+          node packages/desktop/scripts/check-no-secrets.mjs

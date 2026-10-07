@@ -15,7 +15,11 @@
     "package": "electron-builder --mac --publish never",
     "package:dir": "electron-builder --mac --dir --publish never",
     "rebuild": "electron-builder install-app-deps",
-    "prepackage:dir": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs"
+    "prepackage:dir": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "package:mac": "electron-builder --mac --publish never",
+    "package:win": "electron-builder --win --publish never",
+    "prepackage:mac": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "prepackage:win": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs"
   },
   "dependencies": {
     "node-pty": "^1.0.0"
