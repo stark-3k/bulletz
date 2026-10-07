@@ -5,7 +5,18 @@ import { Settings } from "./Settings.tsx";
 import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
 import { NotificationBell, type LocalNotification } from "./Notifications.tsx";
 import { checkForUpdate, dismissUpdate } from "./updates.ts";
-import { serverSource } from "./server.ts";
+import { clearServer, resolveServer, serverSource } from "./server.ts";
+import {
+  activeAccount,
+  beginAddWorkspace,
+  clearLegacyToken,
+  endAddWorkspace,
+  isAddingWorkspace,
+  legacyToken,
+  removeAccount,
+  upsertAccount,
+} from "./accounts.ts";
+import { WorkspaceMenu } from "./WorkspaceMenu.tsx";
 import { Onboarding, type OnboardingState } from "./Onboarding.tsx";
 import {
   TerminalPane,
@@ -22,7 +33,6 @@ import { VoiceBar } from "./VoiceBar.tsx";
 import logoUrl from "../public/logo.svg";
 import markUrl from "../public/mark.svg";
 
-const TOKEN_KEY = "bulletz.token";
 const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase();
 const time = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -38,11 +48,24 @@ export function App() {
   }
   if (crash) throw new Error("simulated render failure (dev crash probe)");
 
-  // VITE_BULLETZ_TOKEN is a local-development convenience only: it keeps the
-  // dev server from stopping at the login screen. Never ship a build with it.
-  const [token, setToken] = useState(
-    () => localStorage.getItem(TOKEN_KEY) ?? import.meta.env.VITE_BULLETZ_TOKEN ?? "",
+  // The active workspace supplies the credential. `bulletz.token` is the
+  // pre-accounts single sign-in, kept as a fallback so upgrading does not log
+  // anyone out — it is converted into an account as soon as we know whose it
+  // is. VITE_BULLETZ_TOKEN is a local-development convenience only, stripped
+  // from every production build.
+  const [token, setToken] = useState(() =>
+    // Mid-add there is deliberately no credential: the point is to obtain one
+    // for a server the signed-in account knows nothing about.
+    isAddingWorkspace()
+      ? ""
+      : (activeAccount()?.token ??
+        legacyToken() ??
+        (import.meta.env.VITE_BULLETZ_TOKEN as string | undefined) ??
+        ""),
   );
+  /** Set while adding a second workspace: the sign-in screen is shown over a
+   *  session that is still perfectly valid, so cancelling must return to it. */
+  const [addingWorkspace, setAddingWorkspace] = useState(() => isAddingWorkspace());
   const [me, setMe] = useState<{ id: string; handle: string; kind: string; role: string } | null>(null);
   const [authErr, setAuthErr] = useState("");
   const [probe, setProbe] = useState(0);
@@ -77,23 +100,46 @@ export function App() {
   useEffect(() => {
     if (!api) return;
     let live = true;
-    api
-      .me()
-      .then((r) => live && setMe(r.actor))
-      .catch((e: Error) => {
+    void (async () => {
+      try {
+        const { actor } = await api.me();
         if (!live) return;
-        setAuthErr(e.message);
+        setMe(actor);
+
+        // Record (or refresh) the workspace this credential belongs to. This
+        // is also the upgrade path: a pre-accounts token becomes the first
+        // account here, because only now do we know whose it is and where.
+        const project = await api.project().catch(() => null);
+        if (!live) return;
+        const account = upsertAccount({
+          serverUrl: resolveServer(),
+          token: api.authToken,
+          workspaceId: actor.workspace_id,
+          workspaceName: project?.name ?? "Workspace",
+          handle: actor.handle,
+          actorId: actor.id,
+          role: actor.role,
+        });
+        clearLegacyToken();
+        endAddWorkspace();
+        setAddingWorkspace(false);
+        // Main runs the agent and the MCP bridge; they must follow the window.
+        void bridge()?.server?.set(account.serverUrl);
+      } catch (e) {
+        if (!live) return;
+        setAuthErr((e as Error).message);
         setMe(null);
-        localStorage.removeItem(TOKEN_KEY);
+        clearLegacyToken();
         setToken("");
-      });
+      }
+    })();
     return () => {
       live = false;
     };
   }, [api]);
 
-  // A downloaded app that has never been told where its workspace lives.
-  if (serverSource() === "none") {
+  // A downloaded app that has never been told where any workspace lives.
+  if (serverSource() === "none" && !addingWorkspace) {
     return <Connect onConnected={() => location.reload()} />;
   }
   if (unreachable) {
@@ -104,7 +150,6 @@ export function App() {
     return (
       <Setup
         onDone={(t) => {
-          localStorage.setItem(TOKEN_KEY, t);
           setNeedsSetup(false);
           setToken(t);
         }}
@@ -112,29 +157,62 @@ export function App() {
     );
   }
 
-  if (!api || !me) {
+  if (!api || !me || addingWorkspace) {
     return (
       <Auth
         error={authErr}
+        // Adding a second workspace happens over a session that is still
+        // valid, so there has to be a way back to it.
+        onCancel={
+          addingWorkspace
+            ? () => {
+                endAddWorkspace();
+                clearServer();
+                // The picker may have pointed this page at another server;
+                // only a reload puts the API base back where it belongs.
+                location.reload();
+              }
+            : undefined
+        }
         onSubmit={(t) => {
           setAuthErr("");
-          localStorage.setItem(TOKEN_KEY, t);
           setToken(t);
         }}
       />
     );
   }
+  /** Sign out of the workspace in view. Other workspaces stay signed in —
+   *  leaving one team is not leaving all of them — and the most recent
+   *  survivor becomes active. */
   const signOut = () => {
     // Revoke server-side first, but never let a failed call strand someone on
-    // a screen they are trying to leave: the local token goes either way.
+    // a screen they are trying to leave: the local credential goes either way.
     void api.logout().catch(() => {});
-    localStorage.removeItem(TOKEN_KEY);
+    const current = activeAccount();
+    const next = current ? removeAccount(current.id) : null;
+    clearLegacyToken();
     setMe(null);
     setAuthErr("");
+    if (next) {
+      // Switching servers means a different socket, cache and event stream;
+      // reload rather than re-point them.
+      location.reload();
+      return;
+    }
     setToken("");
   };
 
-  return <Workspace api={api} me={me} onSignOut={signOut} />;
+  return (
+    <Workspace
+      api={api}
+      me={me}
+      onSignOut={signOut}
+      onAddWorkspace={() => {
+        beginAddWorkspace();
+        setAddingWorkspace(true);
+      }}
+    />
+  );
 }
 
 /** Sign-in. Three ways in, because three different things need to get in: a
@@ -193,7 +271,15 @@ function Setup({ onDone }: { onDone: (token: string) => void }) {
   );
 }
 
-function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => void }) {
+function Auth({
+  error,
+  onSubmit,
+  onCancel,
+}: {
+  error: string;
+  onSubmit: (t: string) => void;
+  onCancel?: (() => void) | undefined;
+}) {
   const [mode, setMode] = useState<"login" | "invite" | "token" | "reset">("login");
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
@@ -238,7 +324,11 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
         <h1>
           <img className="logo-mark" src={logoUrl} alt="bulletz.ai" />
         </h1>
-        <p>The context layer for local coding agents.</p>
+        <p>
+          {onCancel
+            ? "Sign in to another workspace. Set its server below first."
+            : "The context layer for local coding agents."}
+        </p>
 
         <div className="auth-tabs">
           {(["login", "invite", "reset", "token"] as const).map((m) => (
@@ -343,6 +433,11 @@ function Auth({ error, onSubmit }: { error: string; onSubmit: (t: string) => voi
         )}
 
         <ServerPicker onChanged={() => location.reload()} />
+        {onCancel && (
+          <button type="button" className="linklike auth-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
       </form>
     </div>
   );
@@ -352,10 +447,13 @@ function Workspace({
   api,
   me,
   onSignOut,
+  onAddWorkspace,
 }: {
   api: Api;
   me: { id: string; handle: string; kind: string; role: string };
   onSignOut: () => void;
+  /** Show the sign-in screen over this session, to join another workspace. */
+  onAddWorkspace: () => void;
 }) {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -732,8 +830,15 @@ function Workspace({
             the product. The full wordmark lives on the sign-in screen. */}
         <div className="logo" title="bulletz.ai">
           <img className="logo-mark" src={markUrl} alt="bulletz.ai" />
-          <span className="logo-workspace">{project?.name ?? "Bulletz"}</span>
         </div>
+        <WorkspaceMenu
+          current={{
+            workspaceName: project?.name ?? "Bulletz",
+            handle: me.handle,
+            serverUrl: resolveServer(),
+          }}
+          onAdd={onAddWorkspace}
+        />
         <div className="nav">
           {(["chat", "apps"] as const).map((s) => (
             <button

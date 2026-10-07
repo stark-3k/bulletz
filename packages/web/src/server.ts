@@ -7,6 +7,8 @@
  * first question the app has to answer, before there is anything to sign in to.
  */
 
+import { activeAccount, isAddingWorkspace } from "./accounts.ts";
+
 const KEY = "bulletz.server";
 
 /** Accepts what people actually type: "box.example.com", "box:4000", a full URL. */
@@ -34,7 +36,7 @@ export function savedServer(): string | null {
 /** Where the current answer came from. "none" is the one that matters: a
  *  downloaded app on first launch has no basis for a guess, and guessing
  *  localhost just to fail is how you greet a new user with an error page. */
-export type ServerSource = "saved" | "host" | "pinned" | "origin" | "dev" | "none";
+export type ServerSource = "account" | "saved" | "host" | "pinned" | "origin" | "dev" | "none";
 
 /** The desktop main process hands its stored choice to the renderer at launch,
  *  because a packaged app loads over file:// and has no origin to infer from. */
@@ -45,6 +47,12 @@ function hostServer(): string | null {
 }
 
 export function serverSource(): ServerSource {
+  // While joining another workspace the explicit choice wins: the whole point
+  // is to reach a server the signed-in account knows nothing about.
+  if (isAddingWorkspace() && savedServer()) return "saved";
+  // Otherwise a signed-in workspace settles it outright: its server is the
+  // server, whatever the build or the origin would suggest.
+  if (activeAccount()) return "account";
   if (savedServer()) return "saved";
   if (hostServer()) return "host";
   if (import.meta.env.VITE_BULLETZ_URL) return "pinned";
@@ -55,6 +63,12 @@ export function serverSource(): ServerSource {
 
 export function resolveServer(): string {
   const saved = savedServer();
+  // See serverSource(): mid-add, the explicit choice outranks the account.
+  if (isAddingWorkspace() && saved) return saved;
+
+  const account = activeAccount();
+  if (account) return account.serverUrl;
+
   if (saved) return saved;
 
   // The desktop app's own record, for the packaged case where localStorage is

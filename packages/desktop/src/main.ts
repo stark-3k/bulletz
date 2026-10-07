@@ -115,18 +115,50 @@ function projectEnv(): Record<string, string> {
  */
 const agentTokenFile = () => join(app.getPath("userData"), "agent-token.json");
 
-function storedAgentToken(): string | null {
+/**
+ * Agent credentials, one per server.
+ *
+ * An agent token is an identity inside a single workspace and meaningless in
+ * any other, so there is no such thing as "the" agent token once this app can
+ * be signed in to several. Keyed by server URL, which is what identifies a
+ * workspace here — one server, one workspace.
+ */
+type AgentTokens = { byServer?: Record<string, string>; token?: string };
+
+function readAgentTokens(): AgentTokens {
   try {
-    const raw = JSON.parse(readFileSync(agentTokenFile(), "utf8")) as { token?: string };
-    return typeof raw.token === "string" && raw.token ? raw.token : null;
+    return JSON.parse(readFileSync(agentTokenFile(), "utf8")) as AgentTokens;
   } catch {
-    return null;
+    return {};
   }
 }
 
-function storeAgentToken(token: string | null) {
+function storedAgentToken(serverUrl?: string | null): string | null {
+  const raw = readAgentTokens();
+  const key = serverUrl ?? storedServer();
+  if (key && raw.byServer?.[key]) return raw.byServer[key]!;
+  // The pre-multi-workspace file held a single token with no server attached.
+  // It belongs to whichever workspace was signed in at the time, which is the
+  // only one that existed — so it stays usable until a per-server one is set.
+  return typeof raw.token === "string" && raw.token ? raw.token : null;
+}
+
+function storeAgentToken(token: string | null, serverUrl?: string | null) {
+  const key = serverUrl ?? storedServer();
+  const raw = readAgentTokens();
+  const byServer = { ...(raw.byServer ?? {}) };
+  if (key) {
+    if (token) byServer[key] = token;
+    else delete byServer[key];
+  }
   mkdirSync(app.getPath("userData"), { recursive: true });
-  writeFileSync(agentTokenFile(), JSON.stringify({ token }, null, 2), { mode: 0o600 });
+  writeFileSync(
+    agentTokenFile(),
+    // The legacy single token is dropped once a keyed one exists for the same
+    // server, so it cannot later be mistaken for a different workspace's.
+    JSON.stringify({ byServer }, null, 2),
+    { mode: 0o600 },
+  );
 }
 
 /** The server URL the renderer settled on, persisted outside the project tree
@@ -201,18 +233,31 @@ function savePolicy(p: Policy) {
 
 /** Posts an agent's turn into the shared channel, so the work is visible to the
  *  whole team instead of dying in one person's scrollback. */
+/** Where a run posts its results. Captured when the run starts, never read
+ *  back from current state: someone switching workspaces mid-run must not
+ *  redirect an answer into a team that never asked the question. */
+type RunTarget = { base: string; token: string | undefined };
+
+function currentTarget(): RunTarget {
+  const env = projectEnv();
+  return {
+    base: env["BULLETZ_SERVER_URL"] ?? "http://localhost:4000",
+    token: env["BULLETZ_AGENT_TOKEN"],
+  };
+}
+
 async function postToChannel(
+  target: RunTarget,
   channelId: string,
   kind: string,
   body: string | null,
   payload: Record<string, unknown> = {},
 ) {
-  const env = projectEnv();
-  const base = env["BULLETZ_SERVER_URL"] ?? "http://localhost:4000";
+  const base = target.base;
   // The agent posts under its OWN identity. Falling back to the human's token
   // would make the agent's work read as if a person wrote it, which is exactly
   // what the actor model exists to prevent — so there is no fallback.
-  const token = env["BULLETZ_AGENT_TOKEN"];
+  const token = target.token;
   if (!token) {
     console.warn("BULLETZ_AGENT_TOKEN is not set; agent output will not be posted to the channel");
     return;
@@ -444,9 +489,16 @@ app.whenReady().then(() => {
 
   /* -------------------------- agent adapter --------------------------- */
 
+  /** Where each in-flight run posts. Captured at start so that switching
+   *  workspaces mid-run cannot redirect an answer into a team that never
+   *  asked the question. */
+  const runTargets = new Map<string, RunTarget>();
+
   const adapter = new ClaudeCodeAdapter({
-    cwd: projectRoot(),
-    env: agentEnv(),
+    // Resolved per run: both the project folder and the active workspace can
+    // change while the app is open.
+    cwd: () => projectRoot(),
+    env: () => agentEnv(),
     mcpConfig: join(projectRoot(), ".mcp.json"),
     // Carry each channel's claude session across app restarts, so a channel
     // keeps one continuous conversation instead of meeting a stranger.
@@ -454,6 +506,8 @@ app.whenReady().then(() => {
     onEvent: (channelId, e: AgentEvent) => {
       // Accumulate the run so it survives the window. The transcript stays
       // local — this file is never sent to the server.
+      const target = runTargets.get(channelId) ?? currentTarget();
+
       const rec = inFlight.get(channelId);
       if (rec) {
         rec.events.push(e);
@@ -467,11 +521,13 @@ app.whenReady().then(() => {
           rec.turns = e.turns;
           sessions.append(rec);
           inFlight.delete(channelId);
+          runTargets.delete(channelId);
         } else if (e.type === "error") {
           rec.endedAt = new Date().toISOString();
           rec.status = "error";
           sessions.append(rec);
           inFlight.delete(channelId);
+          runTargets.delete(channelId);
         }
       }
 
@@ -483,10 +539,10 @@ app.whenReady().then(() => {
 
       // Opt-in escape hatch for anyone who wants the old firehose.
       if (loadPolicy().postTranscript) {
-        if (e.type === "text") void postToChannel(channelId, "message", e.text);
-        else if (e.type === "tool") void postToChannel(channelId, "tool_call", e.name, { input: e.input });
+        if (e.type === "text") void postToChannel(target, channelId, "message", e.text);
+        else if (e.type === "tool") void postToChannel(target, channelId, "tool_call", e.name, { input: e.input });
         else if (e.type === "end")
-          void postToChannel(channelId, "agent_turn_end", null, {
+          void postToChannel(target, channelId, "agent_turn_end", null, {
             subtype: e.subtype,
             cost_usd: e.costUsd,
             turns: e.turns,
@@ -494,7 +550,7 @@ app.whenReady().then(() => {
       }
       // An error is the one thing worth surfacing regardless: a run that died
       // silently looks to the room like nobody ever picked the task up.
-      if (e.type === "error") void postToChannel(channelId, "agent_error", e.message);
+      if (e.type === "error") void postToChannel(target, channelId, "agent_error", e.message);
     },
   });
 
@@ -625,6 +681,8 @@ app.whenReady().then(() => {
         turns: null,
         events: [],
       });
+      // Pin this run to the workspace it was started from.
+      runTargets.set(channelId, currentTarget());
       void adapter.run(channelId, prompt, policy, trusted);
       return { ok: true };
     },

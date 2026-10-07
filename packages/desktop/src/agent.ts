@@ -85,9 +85,12 @@ export class ClaudeCodeAdapter {
 
   constructor(
     private opts: {
-      cwd: string;
-      env: Record<string, string>;
-      mcpConfig: string;
+      /** Resolved per run, not captured once: the workspace in view and the
+       *  chosen project folder can both change while the app is open, and a
+       *  run started afterwards should use the current ones. */
+      cwd: string | (() => string);
+      env: Record<string, string> | (() => Record<string, string>);
+      mcpConfig: string | (() => string);
       onEvent: (channelId: string, e: AgentEvent) => void;
       resumeSessions?: Record<string, string>;
     },
@@ -126,7 +129,8 @@ export class ClaudeCodeAdapter {
       "-p",
       "--output-format", "stream-json",
       "--verbose",
-      "--mcp-config", this.opts.mcpConfig,
+      "--mcp-config",
+      typeof this.opts.mcpConfig === "function" ? this.opts.mcpConfig() : this.opts.mcpConfig,
       "--strict-mcp-config",
       "--max-budget-usd", String(policy.maxBudgetUsd),
       "--permission-prompts", "none",
@@ -166,8 +170,11 @@ export class ClaudeCodeAdapter {
     ];
 
     const proc = spawn("claude", args, {
-      cwd: this.opts.cwd,
-      env: { ...process.env, ...this.opts.env },
+      cwd: typeof this.opts.cwd === "function" ? this.opts.cwd() : this.opts.cwd,
+      env: {
+        ...process.env,
+        ...(typeof this.opts.env === "function" ? this.opts.env() : this.opts.env),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
 

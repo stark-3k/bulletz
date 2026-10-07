@@ -2,9 +2,10 @@ import type { Decision, Event, Note, Task, Channel, Notification, ChannelUnread 
 
 import { resolveServer } from "./server.ts";
 
-// Resolved once per load. Changing servers reloads the app rather than trying
-// to re-point live sockets, caches, and an in-flight event stream at a
-// different workspace — that path is all risk and no benefit.
+// Resolved once per load. Switching workspaces reloads the app rather than
+// trying to re-point live sockets, caches, and an in-flight event stream at a
+// different server — that path is all risk and no benefit, and a workspace
+// switch is exactly the moment a clean slate is wanted.
 const BASE = resolveServer();
 
 export type Constraint = {
