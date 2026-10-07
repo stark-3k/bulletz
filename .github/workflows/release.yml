@@ -32,25 +32,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # One runner per architecture rather than cross-building. node-pty
-          # ships prebuilds for both darwin arches, but `npmRebuild: false`
-          # means whatever `npm ci` leaves in build/Release is the host's —
-          # cross-building risks shipping an arm64 binary inside an x64 app,
-          # which fails only at runtime, in someone else's hands.
-          - name: macOS arm64
+          # Both macOS architectures come off one runner. That is safe only
+          # because a clean `npm ci` installs node-pty's prebuilds rather than
+          # compiling it, so each app gets the prebuild matching its own arch
+          # at runtime. verify-package asserts exactly that, and fails the
+          # build if a compiled binary with the host's architecture ever shows
+          # up inside the other arch's app.
+          - name: macOS
             os: macos-14
             script: package:mac
-            args: --arm64
-            experimental: false
-          - name: macOS x64
-            os: macos-13
-            script: package:mac
-            args: --x64
             experimental: false
           - name: Windows x64
             os: windows-latest
             script: package:win
-            args: --x64
             experimental: true
 
     steps:
@@ -86,11 +80,19 @@ jobs:
           # looking for a signing identity and fails rather than producing an
           # ad-hoc signed build.
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run ${{ matrix.script }} -w @bulletz/desktop -- ${{ matrix.args }}
+        run: npm run ${{ matrix.script }} -w @bulletz/desktop
 
       - name: List what was produced
         shell: bash
         run: ls -lh packages/desktop/release/ | grep -Ev '^d|^total' || true
+
+      # Checks the artifact itself rather than the inputs to it: the right
+      # architecture, a node-pty that will actually load, the renderer present,
+      # and no credential anywhere in the bundle.
+      - name: Verify the built app
+        if: runner.os == 'macOS'
+        working-directory: packages/desktop
+        run: node scripts/verify-package.mjs release
 
       - name: Upload to the release
         shell: bash
