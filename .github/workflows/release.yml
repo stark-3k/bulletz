@@ -42,6 +42,17 @@ jobs:
             os: macos-14
             script: package:mac
             experimental: false
+          # node-pty publishes no Linux prebuilds, so this is the one
+          # platform where it must be compiled against Electron's headers
+          # before packaging. verify-package fails the build if that step is
+          # ever skipped, rather than shipping an app whose terminal cannot
+          # start.
+          - name: Linux x64
+            os: ubuntu-latest
+            script: package:linux
+            rebuild: true
+            experimental: false
+
           - name: Windows x64
             os: windows-latest
             script: package:win
@@ -73,6 +84,10 @@ jobs:
           fi
           echo "tag $TAG matches version $VERSION"
 
+      - name: Rebuild node-pty for Electron
+        if: matrix.rebuild
+        run: npm run rebuild:pty -w @bulletz/desktop
+
       - name: Build and package
         shell: bash
         env:
@@ -90,7 +105,7 @@ jobs:
       # architecture, a node-pty that will actually load, the renderer present,
       # and no credential anywhere in the bundle.
       - name: Verify the built app
-        if: runner.os == 'macOS'
+        if: runner.os != 'Windows'
         working-directory: packages/desktop
         run: node scripts/verify-package.mjs release
 
@@ -102,7 +117,8 @@ jobs:
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
           shopt -s nullglob
           FILES=(packages/desktop/release/*.dmg packages/desktop/release/*.zip \
-                 packages/desktop/release/*.exe packages/desktop/release/*.blockmap)
+                 packages/desktop/release/*.exe packages/desktop/release/*.AppImage \
+                 packages/desktop/release/*.blockmap)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::nothing was built"
             exit 1
@@ -121,6 +137,7 @@ jobs:
             packages/desktop/release/*.dmg
             packages/desktop/release/*.zip
             packages/desktop/release/*.exe
+            packages/desktop/release/*.AppImage
           if-no-files-found: ignore
           retention-days: 14
 
@@ -143,6 +160,5 @@ jobs:
           echo "add \`APPLE_ID\`, \`APPLE_APP_SPECIFIC_PASSWORD\` and \`APPLE_TEAM_ID\`" >> $GITHUB_STEP_SUMMARY
           echo "for notarization." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "There is no Linux target: node-pty ships no Linux prebuilds, and" >> $GITHUB_STEP_SUMMARY
-          echo "\`npmRebuild\` is off, so an AppImage would ship without a working" >> $GITHUB_STEP_SUMMARY
-          echo "terminal." >> $GITHUB_STEP_SUMMARY
+          echo "The Linux AppImage is unsigned too, and self-contained — mark it" >> $GITHUB_STEP_SUMMARY
+          echo "executable with \`chmod +x\` and run it." >> $GITHUB_STEP_SUMMARY

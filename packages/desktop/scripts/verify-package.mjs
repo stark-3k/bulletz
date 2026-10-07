@@ -23,19 +23,29 @@ if (!existsSync(dir)) {
 const problems = [];
 const note = (s) => console.log(`  ${s}`);
 
-/** Every .app under the release directory, with the arch its folder implies. */
+/**
+ * Every built application tree under the release directory.
+ *
+ * macOS gives a .app bundle per architecture; Linux gives linux-unpacked/.
+ * The AppImage itself is a squashfs image, so the unpacked tree beside it is
+ * what can actually be inspected — and it is the same bytes.
+ */
 function findApps(root) {
   const out = [];
   for (const name of readdirSync(root)) {
     const p = join(root, name);
     if (!statSync(p).isDirectory()) continue;
     if (name.endsWith(".app")) {
-      out.push(p);
+      out.push({ path: p, kind: "mac" });
+      continue;
+    }
+    if (name.startsWith("linux-unpacked")) {
+      out.push({ path: p, kind: "linux" });
       continue;
     }
     // electron-builder writes mac/ for x64 and mac-arm64/ for arm64.
     for (const inner of readdirSync(p)) {
-      if (inner.endsWith(".app")) out.push(join(p, inner));
+      if (inner.endsWith(".app")) out.push({ path: join(p, inner), kind: "mac" });
     }
   }
   return out;
@@ -43,8 +53,8 @@ function findApps(root) {
 
 const archOf = (file) => {
   const out = execFileSync("file", ["-b", file]).toString();
-  if (out.includes("arm64")) return "arm64";
-  if (out.includes("x86_64")) return "x64";
+  if (out.includes("arm64") || out.includes("aarch64")) return "arm64";
+  if (out.includes("x86_64") || out.includes("x86-64")) return "x64";
   return "unknown";
 };
 
@@ -63,14 +73,24 @@ if (apps.length === 0) {
   process.exit(1);
 }
 
-for (const app of apps) {
-  const expected = app.includes("mac-arm64") ? "arm64" : app.includes("/mac/") ? "x64" : null;
-  note(`\n${app}`);
+for (const { path: app, kind } of apps) {
+  const expected =
+    kind === "linux"
+      ? "x64"
+      : app.includes("mac-arm64")
+        ? "arm64"
+        : app.includes("/mac/")
+          ? "x64"
+          : null;
+  note(`\n${app}  [${kind}]`);
 
   // 1. The executable is the architecture its folder claims.
-  const exe = join(app, "Contents", "MacOS", "Bulletz");
-  if (!existsSync(exe)) {
-    problems.push(`${app}: no executable at Contents/MacOS/Bulletz`);
+  const exe =
+    kind === "mac"
+      ? join(app, "Contents", "MacOS", "Bulletz")
+      : [join(app, "bulletz"), join(app, "Bulletz")].find((p) => existsSync(p));
+  if (!exe || !existsSync(exe)) {
+    problems.push(`${app}: no executable found`);
     continue;
   }
   const arch = archOf(exe);
@@ -79,11 +99,28 @@ for (const app of apps) {
     problems.push(`${app}: executable is ${arch}, expected ${expected}`);
   }
 
-  // 2. node-pty must come from prebuilds, never from a compiled build/Release
-  //    whose architecture follows the build host rather than the target.
   const files = [...walk(app)];
+
+  // 2. node-pty has to be loadable. On macOS it comes from prebuilds and must
+  //    never be a compiled binary carrying the build host's architecture. On
+  //    Linux there are no prebuilds at all, so a compiled one is required —
+  //    its absence means the terminal cannot start.
   const compiled = files.filter((f) => /node-pty\/build\/Release\/.*\.node$/.test(f));
-  if (compiled.length) {
+  if (kind === "linux") {
+    if (compiled.length === 0) {
+      problems.push(
+        `${app}: no compiled node-pty — node-pty ships no Linux prebuilds, so it must be ` +
+          `rebuilt against Electron before packaging or the terminal will not start`,
+      );
+      note(`  node-pty        MISSING`);
+    } else {
+      const archs = [...new Set(compiled.map(archOf))];
+      note(`  node-pty        compiled (${archs.join(", ")})`);
+      if (!archs.includes(arch)) {
+        problems.push(`${app}: node-pty is ${archs.join(", ")} inside a ${arch} app`);
+      }
+    }
+  } else if (compiled.length) {
     const archs = [...new Set(compiled.map(archOf))];
     note(`  node-pty        COMPILED (${archs.join(", ")})`);
     if (!archs.every((a) => a === arch)) {
@@ -101,9 +138,12 @@ for (const app of apps) {
   }
 
   // 3. The renderer ships with the app.
-  const index = join(app, "Contents", "Resources", "web", "index.html");
+  const index =
+    kind === "mac"
+      ? join(app, "Contents", "Resources", "web", "index.html")
+      : join(app, "resources", "web", "index.html");
   note(`  renderer        ${existsSync(index) ? "present" : "MISSING"}`);
-  if (!existsSync(index)) problems.push(`${app}: Contents/Resources/web/index.html is missing`);
+  if (!existsSync(index)) problems.push(`${app}: the renderer is missing at ${index}`);
 
   // 4. Nothing in the shipped bundle is a credential. check-no-secrets guards
   //    the web build; this guards what actually ends up in the artifact.

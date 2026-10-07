@@ -112,11 +112,15 @@ npm run package -w @bulletz/desktop
 
 Produces unsigned `.dmg` and `.zip` for arm64 and x64 in `packages/desktop/release/`. The build strips `VITE_BULLETZ_TOKEN` and refuses to package if any credential is found in the bundle.
 
-Publishing a GitHub release tagged `v<version>` builds the same binaries in CI
-and attaches them — macOS arm64 and x64 on their own runners, since cross-building
-risks shipping the wrong architecture's `node-pty`. Windows is built best-effort
-and cannot block a release. There is no Linux target: `node-pty` publishes no
-Linux prebuilds, so an AppImage would ship without a working terminal.
+Publishing a GitHub release tagged `v<version>` builds the binaries in CI and
+attaches them: macOS (arm64 and x64), a Linux AppImage, and a Windows installer.
+Windows is best-effort and cannot block a release.
+
+Each build is checked before upload — right architecture, a `node-pty` that will
+actually load, the renderer present, no credential anywhere in the bundle.
+Linux needs that check most: `node-pty` publishes no Linux prebuilds, so it is
+compiled against Electron's headers first, and an app that skipped that step
+would ship with a terminal that cannot start.
 
 > Builds are **ad-hoc signed only**. Gatekeeper will block them on other machines without an Apple Developer ID and notarization.
 

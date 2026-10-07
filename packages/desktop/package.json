@@ -19,12 +19,16 @@
     "package:mac": "electron-builder --mac --publish never",
     "package:win": "electron-builder --win --publish never",
     "prepackage:mac": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
-    "prepackage:win": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs"
+    "prepackage:win": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "package:linux": "electron-builder --linux --publish never",
+    "prepackage:linux": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "rebuild:pty": "electron-rebuild -v 33.4.11 -f -w node-pty"
   },
   "dependencies": {
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
     "@types/node": "^22.10.2",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",
@@ -87,10 +91,17 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "assets/icon.png",
-      "category": "Development"
+      "category": "Development",
+      "synopsis": "The context layer for local coding agents.",
+      "executableName": "bulletz"
     },
     "electronVersion": "33.4.11",
     "npmRebuild": false,
