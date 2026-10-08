@@ -1,6 +1,6 @@
 import { spawn as spawnPty, type IPty } from "node-pty";
 import { BrowserWindow, Notification, app, desktopCapturer, dialog, ipcMain, nativeImage, session, shell, systemPreferences } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -48,6 +48,44 @@ function projectRoot(): string {
   // Unpackaged, __dirname is packages/desktop/dist and the repo is three up.
   if (!app.isPackaged) return resolve(__dirname, "..", "..", "..");
   return app.getPath("home");
+}
+
+/**
+ * Adopt the PATH a terminal would have.
+ *
+ * An app launched from Finder or the Dock inherits launchd's environment, not
+ * a shell's — typically just /usr/bin:/bin:/usr/sbin:/sbin. Every tool a
+ * developer installs lives somewhere else: nvm, Homebrew, pnpm, asdf, cargo.
+ * So `claude` is right there in the user's shell and invisible to this
+ * process, and a chat-triggered run fails with a bare `spawn claude ENOENT`
+ * that points at nothing.
+ *
+ * Asking the login shell is the only reliable way to find out, because the
+ * answer is whatever that person's dotfiles say it is. Interactive (-i) as
+ * well as login (-l): plenty of people set PATH in .zshrc, which a
+ * non-interactive shell never reads.
+ */
+function adoptShellPath() {
+  // Launched from a terminal, the PATH is already the real one.
+  if (!app.isPackaged && process.env["TERM"]) return;
+  const shell = process.env["SHELL"];
+  if (!shell || process.platform === "win32") return;
+  try {
+    const out = execFileSync(shell, ["-ilc", 'printf "%s" "$PATH"'], {
+      encoding: "utf8",
+      timeout: 5000,
+      // A dotfile that prints a banner would otherwise end up in the PATH.
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!out.includes("/")) return;
+    const merged = [...new Set([...out.split(":"), ...(process.env["PATH"] ?? "").split(":")])]
+      .filter(Boolean)
+      .join(":");
+    process.env["PATH"] = merged;
+  } catch {
+    // A shell that hangs or errors is not a reason to refuse to start; the
+    // agent will simply report that it cannot find its binary.
+  }
 }
 
 /** Icon assets live beside the compiled main, so they survive packaging.
@@ -392,6 +430,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  adoptShellPath();
   migrateUserData();
   applyAppIdentity();
 

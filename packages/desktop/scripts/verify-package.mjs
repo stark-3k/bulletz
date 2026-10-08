@@ -137,7 +137,28 @@ for (const { path: app, kind } of apps) {
     }
   }
 
-  // 3. The renderer ships with the app.
+  // 3. node-pty execs spawn-helper to set up the controlling terminal. The
+  //    npm tarball ships it executable; that bit does not survive packaging,
+  //    and without it the terminal hangs on "starting…" with no error at all.
+  if (kind === "mac") {
+    const helpers = files.filter((f) => f.endsWith(`prebuilds/darwin-${arch}/spawn-helper`));
+    if (helpers.length === 0) {
+      problems.push(`${app}: no spawn-helper for darwin-${arch} — the terminal cannot start`);
+      note(`  spawn-helper   MISSING`);
+    } else {
+      const mode = statSync(helpers[0]).mode & 0o777;
+      const execable = (mode & 0o111) !== 0;
+      note(`  spawn-helper   ${mode.toString(8)}${execable ? "" : "  NOT EXECUTABLE"}`);
+      if (!execable) {
+        problems.push(
+          `${app}: spawn-helper is ${mode.toString(8)} and cannot be executed — ` +
+            `node-pty will hang without reporting an error`,
+        );
+      }
+    }
+  }
+
+  // 4. The renderer ships with the app.
   const index =
     kind === "mac"
       ? join(app, "Contents", "Resources", "web", "index.html")
@@ -145,7 +166,7 @@ for (const { path: app, kind } of apps) {
   note(`  renderer        ${existsSync(index) ? "present" : "MISSING"}`);
   if (!existsSync(index)) problems.push(`${app}: the renderer is missing at ${index}`);
 
-  // 4. Nothing in the shipped bundle is a credential. check-no-secrets guards
+  // 5. Nothing in the shipped bundle is a credential. check-no-secrets guards
   //    the web build; this guards what actually ends up in the artifact.
   const cred = /blz_[stir]_[A-Za-z0-9_-]{20,}/;
   const leaked = [];
