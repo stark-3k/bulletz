@@ -338,12 +338,6 @@ button { font: inherit; cursor: pointer; }
 .term-panel {
   display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
   background: var(--bg); border-top: 1px solid var(--line);
-  /* The breathing room has to live out here rather than on .term-host.
-     xterm positions its rows absolutely and the last one overruns whatever
-     padding the host has, so content ended up flush against the window edge
-     however much padding was set inside. Reserving it on the panel puts the
-     gap below the clipping box, where nothing can overflow into it. */
-  padding-bottom: 8px;
 }
 
 .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
@@ -864,7 +858,14 @@ button { font: inherit; cursor: pointer; }
 
 /* ------------------------ private agent transcript ---------------------- */
 
-.dock-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+/* The gap belongs to the dock's CONTENT, not the dock.
+   On .term-host it did nothing — xterm positions its rows absolutely and the
+   last one overruns any padding the host is given, so output reached the
+   window edge regardless. On .term-panel it worked, but squeezed the tab row
+   when the dock is collapsed and the panel is only 28px tall, clipping the
+   labels. Here it is below the box that clips the rows, and it disappears
+   with the content it belongs to. */
+.dock-body { display: flex; flex-direction: column; min-height: 0; flex: 1; padding-bottom: 8px; }
 /* A `display` rule beats the hidden attribute's UA default, so the inactive
    tab stayed visible above the active one. The pane must stay MOUNTED (killing
    the pty is not an option), so hide it explicitly. */
@@ -880,7 +881,8 @@ button { font: inherit; cursor: pointer; }
   border-radius: 3px; padding: 0 4px; color: var(--fg-dim);
 }
 
-.agent-pane { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.agent-pane { display: flex; flex-direction: column; min-height: 0; flex: 1;  padding-bottom: 8px;
+}
 .agent-pane-bar {
   display: flex; align-items: center; gap: 8px; flex: none;
   padding: 5px 14px; border-bottom: 1px solid var(--line-soft);
