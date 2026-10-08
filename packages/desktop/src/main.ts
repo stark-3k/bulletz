@@ -134,13 +134,23 @@ function projectEnv(): Record<string, string> {
   // The window's choice wins over the checked-in dev defaults: the agent and
   // the MCP bridge must talk to the SAME server the UI is signed in to, or the
   // agent reads one workspace and posts into another.
-  const chosen = storedServer();
-  if (chosen) out["BULLETZ_SERVER_URL"] = chosen;
-  // Likewise the agent credential. Without this an installed copy has no way
-  // to get one at all — .env.local is a file in a repo it does not have — and
-  // chat-triggered runs fail silently with nothing to post under.
-  const agentToken = storedAgentToken();
-  if (agentToken) out["BULLETZ_AGENT_TOKEN"] = agentToken;
+  const devServer = out["BULLETZ_SERVER_URL"] ?? out["BULLETZ_URL"];
+  const devToken = out["BULLETZ_AGENT_TOKEN"];
+  const server = storedServer() ?? devServer ?? "";
+  if (server) out["BULLETZ_SERVER_URL"] = server;
+
+  // A credential belongs to one workspace and is meaningless in any other, so
+  // it is only ever paired with the server it was minted against. Previously
+  // the URL was overridden to the signed-in server while the token was left
+  // as whatever .env.local held — a localhost credential sent to a remote
+  // host, which answers 401 and leaves the agent with no workspace and no
+  // explanation of why.
+  const sameHost = (a?: string, b?: string) =>
+    Boolean(a && b) && a!.replace(/\/+$/, "") === b!.replace(/\/+$/, "");
+  const token = storedAgentToken(server) ?? (sameHost(devServer, server) ? devToken : undefined);
+  if (token) out["BULLETZ_AGENT_TOKEN"] = token;
+  else delete out["BULLETZ_AGENT_TOKEN"];
+
   return out;
 }
 
@@ -176,8 +186,9 @@ function storedAgentToken(serverUrl?: string | null): string | null {
   const key = serverUrl ?? storedServer();
   if (key && raw.byServer?.[key]) return raw.byServer[key]!;
   // The pre-multi-workspace file held a single token with no server attached.
-  // It belongs to whichever workspace was signed in at the time, which is the
-  // only one that existed — so it stays usable until a per-server one is set.
+  // It belongs to whichever workspace was signed in at the time — and with no
+  // way to tell which, it may only stand in while there is still just one.
+  if (storedServer()) return null;
   return typeof raw.token === "string" && raw.token ? raw.token : null;
 }
 

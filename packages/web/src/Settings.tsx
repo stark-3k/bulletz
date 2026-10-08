@@ -90,7 +90,7 @@ export function Settings({
             {err && <div className="form-err">{err}</div>}
             {note && <div className="form-note">{note}</div>}
             {tab === "account" && <Account api={api} me={me} run={run} />}
-            {tab === "agent" && <AgentSettings run={run} />}
+            {tab === "agent" && <AgentSettings api={api} run={run} />}
             {tab === "notifications" && <Notifications api={api} run={run} />}
             {tab === "security" && <Security api={api} run={run} onSignOut={onSignOut} />}
             {tab === "tokens" && <Tokens api={api} run={run} />}
@@ -612,7 +612,7 @@ type AgentInfo = {
  * the team's memory and hands it over through MCP — so anything that runs in
  * a terminal belongs here, including agents that do not exist yet.
  */
-function AgentSettings({ run }: { run: Run }) {
+function AgentSettings({ api, run }: { api: Api; run: Run }) {
   const [info, setInfo] = useState<AgentInfo | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -692,7 +692,7 @@ function AgentSettings({ run }: { run: Run }) {
         )}
       </div>
 
-      <McpStatus />
+      <McpStatus api={api} run={run} />
 
       <h4 className="spaced">Found on this machine</h4>
       <div className="rows">
@@ -728,7 +728,7 @@ function AgentSettings({ run }: { run: Run }) {
  * explains why — which is the worst possible failure for something whose only
  * job is to know things.
  */
-function McpStatus() {
+function McpStatus({ api, run }: { api: Api; run: Run }) {
   const [state, setState] = useState<{
     dir: string;
     file: string;
@@ -738,10 +738,15 @@ function McpStatus() {
     bundleExists: boolean;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Whether the agent has an identity in THIS workspace. A credential from
+   *  another one is worse than none — it answers 401 and explains nothing. */
+  const [hasToken, setHasToken] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
-    const r = await bridge()?.agent?.mcp?.();
+    const b = bridge();
+    const r = await b?.agent?.mcp?.();
     if (r) setState(r);
+    setHasToken((await b?.agent?.hasToken?.()) ?? null);
   }, []);
 
   useEffect(() => {
@@ -772,6 +777,32 @@ function McpStatus() {
         referenced, not written — a project folder is usually a git repository, and a token on
         disk there is one commit from being published.
       </p>
+      {hasToken === false && (
+        <>
+          <p className="muted warn">
+            The agent has no identity in this workspace, so the bridge cannot authenticate. It
+            posts under its own handle rather than yours, which is why it needs one of its own.
+          </p>
+          <div className="row">
+            <button
+              className="send"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void run(async () => {
+                  const r = await api.createAgentToken();
+                  await bridge()?.agent?.setToken?.(r.token);
+                  await load();
+                  return `Created a credential for ${r.agent_handle}.`;
+                }).finally(() => setBusy(false));
+              }}
+            >
+              {busy ? "…" : "Create the agent's credential"}
+            </button>
+          </div>
+        </>
+      )}
+
       {!state.connected && (
         <div className="row">
           <button
