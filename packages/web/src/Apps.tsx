@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Note, Task } from "@bulletz/shared";
 import type { Api, Invite, Member } from "./api.ts";
-import { Embed } from "./Embed.tsx";
 import { Notes } from "./Notes.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 
@@ -17,7 +16,7 @@ const COLUMNS = [
 ] as const;
 
 type AppId =
-  | { type: "builtin"; id: "board" | "notes" | "registry" | "site" | "members" }
+  | { type: "builtin"; id: "board" | "notes" | "registry" | "members" }
   | { type: "widget"; id: string };
 
 export function Apps({
@@ -78,17 +77,6 @@ export function Apps({
           </button>
 
           <button
-            className={`app-item${isSel({ type: "builtin", id: "site" }) ? " active" : ""}`}
-            onClick={() => setSel({ type: "builtin", id: "site" })}
-          >
-            <span className="app-glyph">◈</span>
-            <span>
-              bulletz.ai
-              <span className="app-sub">embedded site</span>
-            </span>
-          </button>
-
-          <button
             className={`app-item${isSel({ type: "builtin", id: "members" }) ? " active" : ""}`}
             onClick={() => setSel({ type: "builtin", id: "members" })}
           >
@@ -127,7 +115,6 @@ export function Apps({
         {sel.type === "builtin" && sel.id === "registry" && (
           <Registry api={api} widgets={widgets} onChange={onChange} />
         )}
-        {sel.type === "builtin" && sel.id === "site" && <Embed />}
         {sel.type === "builtin" && sel.id === "members" && <Members api={api} me={me} />}
         {sel.type === "widget" &&
           (() => {
