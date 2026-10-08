@@ -6,8 +6,6 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
-import { ClaudeCodeAdapter, DEFAULT_POLICY, type AgentEvent, type Policy } from "./agent.js";
-import { SessionStore, type RunRecord } from "./sessions.js";
 
 const exec = promisify(execFile);
 
@@ -228,13 +226,82 @@ function agentEnv(): Record<string, string> {
   return agentToken ? { ...env, BULLETZ_TOKEN: agentToken } : env;
 }
 
+/**
+ * Which coding agent to run.
+ *
+ * Deliberately a command rather than an integration. The platform's whole
+ * claim is that it does not care which agent you use — holding the team's
+ * memory over MCP and letting whatever you already run read it — and the
+ * previous implementation contradicted that by spawning `claude` with
+ * Claude-Code-only flags baked in.
+ *
+ * A pty running your command gives that agent's own interface, interactive
+ * and interruptible, and works for agents that do not exist yet.
+ */
+export type AgentCommand = { command: string; args: string[] };
+
+/** Offered in settings, and used to guess on first run. Order is not a
+ *  ranking — it is the order PATH is searched when nothing is configured. */
+export const AGENT_PRESETS: { id: string; label: string; cmd: AgentCommand }[] = [
+  { id: "claude", label: "Claude Code", cmd: { command: "claude", args: [] } },
+  { id: "codex", label: "Codex CLI", cmd: { command: "codex", args: [] } },
+  { id: "gemini", label: "Gemini CLI", cmd: { command: "gemini", args: [] } },
+  { id: "opencode", label: "OpenCode", cmd: { command: "opencode", args: [] } },
+  { id: "aider", label: "Aider", cmd: { command: "aider", args: [] } },
+  { id: "cursor", label: "Cursor Agent", cmd: { command: "cursor-agent", args: [] } },
+];
+
+const agentCmdFile = () => join(app.getPath("userData"), "agent-command.json");
+
+function onPath(cmd: string): boolean {
+  try {
+    execFileSync("command", ["-v", cmd], { stdio: "ignore", shell: true, timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function storedAgentCommand(): AgentCommand | null {
+  try {
+    const raw = JSON.parse(readFileSync(agentCmdFile(), "utf8")) as Partial<AgentCommand>;
+    if (typeof raw.command !== "string" || !raw.command.trim()) return null;
+    return { command: raw.command.trim(), args: Array.isArray(raw.args) ? raw.args.map(String) : [] };
+  } catch {
+    return null;
+  }
+}
+
+function storeAgentCommand(cmd: AgentCommand | null) {
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(agentCmdFile(), JSON.stringify(cmd ?? {}, null, 2));
+}
+
+/** The configured command, or the first preset actually installed. Returns
+ *  null when nothing is configured and nothing is found, so the pane can say
+ *  so instead of failing with a bare ENOENT. */
+function resolveAgentCommand(): AgentCommand | null {
+  const stored = storedAgentCommand();
+  if (stored) return stored;
+  for (const p of AGENT_PRESETS) if (onPath(p.cmd.command)) return p.cmd;
+  return null;
+}
+
 /** A pty plus a bounded replay buffer.
  *
  *  The renderer can go away at any moment — a reload, a hot update — and the
  *  shell must not go with it. The pty lives here, and its recent output is kept
  *  so a reattaching view can be handed the scrollback it missed instead of a
  *  blank screen and a dead job. */
-type Terminal = { pty: IPty; buffer: string[]; bytes: number };
+type Terminal = {
+  /** Shell or agent. A pty id can outlive a change of mind about what it
+   *  runs, and reattaching to the wrong kind silently gives you a shell
+   *  where you asked for an agent. */
+  kind: "shell" | "agent";
+  pty: IPty;
+  buffer: string[];
+  bytes: number;
+};
 const terminals = new Map<string, Terminal>();
 
 /** The source the user picked, consumed by the next getDisplayMedia call. */
@@ -254,63 +321,9 @@ function record(t: Terminal, data: string) {
 // Lives on disk, owned by this machine. A teammate's chat message starting a
 // shell here is remote code execution, so the laptop keeps its own veto rather
 // than trusting a server-side permission.
-const policyPath = join(app.getPath("userData"), "agent-policy.json");
-
-function loadPolicy(): Policy {
-  try {
-    return { ...DEFAULT_POLICY, ...(JSON.parse(readFileSyncRaw(policyPath, "utf8")) as Partial<Policy>) };
-  } catch {
-    return { ...DEFAULT_POLICY };
-  }
-}
-
-function savePolicy(p: Policy) {
-  mkdirSync(app.getPath("userData"), { recursive: true });
-  writeFileSync(policyPath, JSON.stringify(p, null, 2));
-}
 
 /** Posts an agent's turn into the shared channel, so the work is visible to the
  *  whole team instead of dying in one person's scrollback. */
-/** Where a run posts its results. Captured when the run starts, never read
- *  back from current state: someone switching workspaces mid-run must not
- *  redirect an answer into a team that never asked the question. */
-type RunTarget = { base: string; token: string | undefined };
-
-function currentTarget(): RunTarget {
-  const env = projectEnv();
-  return {
-    base: env["BULLETZ_SERVER_URL"] ?? "http://localhost:4000",
-    token: env["BULLETZ_AGENT_TOKEN"],
-  };
-}
-
-async function postToChannel(
-  target: RunTarget,
-  channelId: string,
-  kind: string,
-  body: string | null,
-  payload: Record<string, unknown> = {},
-) {
-  const base = target.base;
-  // The agent posts under its OWN identity. Falling back to the human's token
-  // would make the agent's work read as if a person wrote it, which is exactly
-  // what the actor model exists to prevent — so there is no fallback.
-  const token = target.token;
-  if (!token) {
-    console.warn("BULLETZ_AGENT_TOKEN is not set; agent output will not be posted to the channel");
-    return;
-  }
-  try {
-    await fetch(`${base}/v1/events`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ channel_id: channelId, kind, body, payload }),
-    });
-  } catch {
-    /* the UI still sees the live stream over IPC */
-  }
-}
-
 /** macOS reads the icon from the bundle's Info.plist, which only exists once
  *  the app is packaged. Running from source there is no bundle, so the dock
  *  shows Electron's own atom unless it is set explicitly at runtime. */
@@ -323,10 +336,9 @@ const LEGACY_USER_DATA = [
   "bulletz", // before the product name was capitalised
 ];
 const CARRIED_FILES = [
-  "agent-policy.json",
-  "agent-sessions.jsonl",
   "server.json",
   "project.json",
+  "agent-command.json",
   "agent-token.json",
 ];
 
@@ -454,32 +466,66 @@ app.whenReady().then(() => {
 
   const win = createWindow();
 
-  const sessions = new SessionStore(join(app.getPath("userData"), "agent-sessions.jsonl"));
   /** Runs still in flight, accumulating their transcript until they finish. */
-  const inFlight = new Map<string, RunRecord>();
 
   /* ------------------------------ terminal ------------------------------ */
 
-  ipcMain.handle("term:spawn", (_e, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+  ipcMain.handle(
+    "term:spawn",
+    (
+      _e,
+      { id, cols, rows, kind }: { id: string; cols: number; rows: number; kind?: "shell" | "agent" },
+    ) => {
     // Reattach rather than respawn. Killing the old pty here is what made every
     // reload a fresh shell with the previous job dead.
+    const want = kind ?? "shell";
     const existing = terminals.get(id);
-    if (existing) {
+    // Reattach only to a pty running the same thing. A stale one from before
+    // this pane changed its mind would otherwise be handed back, and you get
+    // a shell prompt where you asked for an agent.
+    if (existing && existing.kind !== want) {
       try {
-        existing.pty.resize(Math.max(cols || 80, 2), Math.max(rows || 24, 2));
+        existing.pty.kill();
+      } catch {
+        /* already gone */
+      }
+      terminals.delete(id);
+    }
+    const reuse = terminals.get(id);
+    if (reuse) {
+      try {
+        reuse.pty.resize(Math.max(cols || 80, 2), Math.max(rows || 24, 2));
       } catch {
         /* pty gone between checks */
       }
       return {
         cwd: projectRoot(),
         shell: process.env.SHELL ?? "/bin/zsh",
-        replay: existing.buffer.join(""),
+        replay: reuse.buffer.join(""),
         reattached: true,
       };
     }
 
+    // An agent pane runs the configured coding agent instead of a login
+    // shell. Same pty, same replay buffer, same reattach — the only
+    // difference is what is on the other end of it.
+    const agent = kind === "agent" ? resolveAgentCommand() : null;
+    if (kind === "agent" && !agent) {
+      return {
+        cwd: projectRoot(),
+        shell: "",
+        replay: "",
+        reattached: false,
+        error:
+          "No coding agent found. Set one in Settings — any CLI agent works; " +
+          `we looked for ${AGENT_PRESETS.map((p) => p.cmd.command).join(", ")}.`,
+      };
+    }
+
     const shellPath = process.env.SHELL ?? "/bin/zsh";
-    const pty = spawnPty(shellPath, ["-l"], {
+    const file = agent ? agent.command : shellPath;
+    const argv = agent ? agent.args : ["-l"];
+    const pty = spawnPty(file, argv, {
       name: "xterm-256color",
       cols: cols || 80,
       rows: rows || 24,
@@ -493,7 +539,7 @@ app.whenReady().then(() => {
       },
     });
 
-    const term: Terminal = { pty, buffer: [], bytes: 0 };
+    const term: Terminal = { pty, buffer: [], bytes: 0, kind: want };
 
     pty.onData((data) => {
       record(term, data);
@@ -505,8 +551,14 @@ app.whenReady().then(() => {
     });
 
     terminals.set(id, term);
-    return { cwd: projectRoot(), shell: shellPath, replay: "", reattached: false };
-  });
+      return {
+        cwd: projectRoot(),
+        shell: agent ? `${agent.command} ${agent.args.join(" ")}`.trim() : shellPath,
+        replay: "",
+        reattached: false,
+      };
+    },
+  );
 
   ipcMain.on("term:write", (_e, { id, data }: { id: string; data: string }) => {
     terminals.get(id)?.pty.write(data);
@@ -526,78 +578,6 @@ app.whenReady().then(() => {
     terminals.delete(id);
   });
 
-  /* -------------------------- agent adapter --------------------------- */
-
-  /** Where each in-flight run posts. Captured at start so that switching
-   *  workspaces mid-run cannot redirect an answer into a team that never
-   *  asked the question. */
-  const runTargets = new Map<string, RunTarget>();
-
-  const adapter = new ClaudeCodeAdapter({
-    // Resolved per run: both the project folder and the active workspace can
-    // change while the app is open.
-    cwd: () => projectRoot(),
-    env: () => agentEnv(),
-    mcpConfig: join(projectRoot(), ".mcp.json"),
-    // Carry each channel's claude session across app restarts, so a channel
-    // keeps one continuous conversation instead of meeting a stranger.
-    resumeSessions: sessions.latestSessions(),
-    onEvent: (channelId, e: AgentEvent) => {
-      // Accumulate the run so it survives the window. The transcript stays
-      // local — this file is never sent to the server.
-      const target = runTargets.get(channelId) ?? currentTarget();
-
-      const rec = inFlight.get(channelId);
-      if (rec) {
-        rec.events.push(e);
-        if (e.type === "start") {
-          rec.sessionId = e.sessionId;
-          rec.model = e.model;
-        } else if (e.type === "end") {
-          rec.endedAt = new Date().toISOString();
-          rec.status = e.subtype;
-          rec.costUsd = e.costUsd;
-          rec.turns = e.turns;
-          sessions.append(rec);
-          inFlight.delete(channelId);
-          runTargets.delete(channelId);
-        } else if (e.type === "error") {
-          rec.endedAt = new Date().toISOString();
-          rec.status = "error";
-          sessions.append(rec);
-          inFlight.delete(channelId);
-          runTargets.delete(channelId);
-        }
-      }
-
-      // The transcript is PRIVATE: it goes to this window only. An agent
-      // thinking out loud and calling twelve tools is working, not reporting,
-      // and mirroring all of it into a shared channel buries the room in noise.
-      // The agent decides what teammates see by calling post_message itself.
-      if (!win.isDestroyed()) win.webContents.send("agent:event", { channelId, event: e });
-
-      // Opt-in escape hatch for anyone who wants the old firehose.
-      if (loadPolicy().postTranscript) {
-        if (e.type === "text") void postToChannel(target, channelId, "message", e.text);
-        else if (e.type === "tool") void postToChannel(target, channelId, "tool_call", e.name, { input: e.input });
-        else if (e.type === "end")
-          void postToChannel(target, channelId, "agent_turn_end", null, {
-            subtype: e.subtype,
-            cost_usd: e.costUsd,
-            turns: e.turns,
-          });
-      }
-      // An error is the one thing worth surfacing regardless: a run that died
-      // silently looks to the room like nobody ever picked the task up.
-      if (e.type === "error") void postToChannel(target, channelId, "agent_error", e.message);
-    },
-  });
-
-  // The renderer owns the choice (it is the thing that can actually probe the
-  // address); main owns persisting it, because the agent and the MCP bridge
-  // run here and need the same answer.
-  // Onboarding mints the agent credential in the renderer; it has to reach
-  // main, which is where the agent and the MCP bridge actually run.
   ipcMain.handle("agent:token", (_e, token: unknown) => {
     if (token === undefined) return storedAgentToken() !== null;
     storeAgentToken(typeof token === "string" && token ? token : null);
@@ -662,70 +642,29 @@ app.whenReady().then(() => {
     return { dir: res.filePaths[0], changed: true };
   });
 
+  /** Which agent the Agent pane runs, and what is available to choose. */
+  ipcMain.handle("agent:command", (_e, patch: unknown) => {
+    if (patch !== undefined) {
+      const p = patch as Partial<AgentCommand> | null;
+      storeAgentCommand(
+        p && typeof p.command === "string" && p.command.trim()
+          ? { command: p.command.trim(), args: Array.isArray(p.args) ? p.args.map(String) : [] }
+          : null,
+      );
+    }
+    return {
+      configured: storedAgentCommand(),
+      resolved: resolveAgentCommand(),
+      presets: AGENT_PRESETS.map((x) => ({ ...x, installed: onPath(x.cmd.command) })),
+    };
+  });
+
   ipcMain.handle("server:get", () => storedServer());
   ipcMain.handle("server:set", (_e, url: unknown) => {
     storeServer(typeof url === "string" && url ? url : null);
     return storedServer();
   });
 
-  ipcMain.handle("agent:policy", (_e, patch?: Partial<Policy>) => {
-    const current = loadPolicy();
-    if (!patch) return current;
-    const next = { ...current, ...patch };
-    savePolicy(next);
-    return next;
-  });
-
-  ipcMain.handle(
-    "agent:run",
-    async (
-      _e,
-      {
-        channelId,
-        prompt,
-        byOwner,
-        actorId,
-        actorHandle,
-      }: {
-        channelId: string;
-        prompt: string;
-        byOwner: boolean;
-        actorId?: string;
-        actorHandle?: string;
-      },
-    ) => {
-      const policy = loadPolicy();
-      if (!policy.enabled) {
-        return { ok: false, error: "Chat-triggered agent runs are disabled on this machine." };
-      }
-      if (policy.triggerFrom === "owner" && !byOwner) {
-        return { ok: false, error: "Only this machine's owner may start a turn here." };
-      }
-      if (adapter.isRunning(channelId)) {
-        return { ok: false, error: "A turn is already running in this channel." };
-      }
-      const trusted = byOwner || !policy.restrictOthers;
-      inFlight.set(channelId, {
-        id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        actorId: actorId ?? null,
-        actorHandle: actorHandle ?? null,
-        channelId,
-        sessionId: null,
-        prompt,
-        model: null,
-        startedAt: new Date().toISOString(),
-        endedAt: null,
-        status: "running",
-        costUsd: null,
-        turns: null,
-        events: [],
-      });
-      // Pin this run to the workspace it was started from.
-      runTargets.set(channelId, currentTarget());
-      void adapter.run(channelId, prompt, policy, trusted);
-      return { ok: true };
-    },
-  );
 
   // Scoped by the caller's actor: signing in as someone else must not expose
   // the previous person's transcripts.
@@ -770,19 +709,6 @@ app.whenReady().then(() => {
     pendingShareSource = id;
     return true;
   });
-
-  ipcMain.handle("agent:sessions", (_e, { actorId }: { actorId?: string } = {}) =>
-    sessions.list(actorId ?? null),
-  );
-  ipcMain.handle("agent:session", (_e, { id, actorId }: { id: string; actorId?: string }) =>
-    sessions.get(id, actorId ?? null),
-  );
-  ipcMain.handle("agent:stop", (_e, { channelId }: { channelId: string }) => adapter.stop(channelId));
-  ipcMain.handle("agent:status", (_e, { channelId }: { channelId: string }) => ({
-    running: adapter.isRunning(channelId),
-  }));
-
-  win.on("closed", () => adapter.stopAll());
 
   /* ---------------------- local state, allowlisted ---------------------- */
   // Only these fields ever leave the machine. Never file contents.

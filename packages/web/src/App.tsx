@@ -22,9 +22,6 @@ import {
   TerminalPane,
   bridge,
   type AgentPolicy,
-  type AgentRunEvent,
-  type AgentSession,
-  type AgentSessionSummary,
 } from "./Terminal.tsx";
 import { Widget, type WidgetRow } from "./Widget.tsx";
 import { Apps } from "./Apps.tsx";
@@ -472,6 +469,27 @@ function Workspace({
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The pending name while a channel is being created; null when idle. */
   const [newChannel, setNewChannel] = useState<string | null>(null);
+  /** Writes into the live agent session. Null while no agent pane is mounted —
+   *  which is also how "send to agent" knows whether it can offer itself.
+   *  Stored in a ref box because a function in state would be called as an
+   *  updater. */
+  const [agentWrite, setAgentWriteRaw] = useState<{ fn: ((d: string) => void) | null }>({ fn: null });
+  const setAgentWrite = useCallback(
+    (fn: ((d: string) => void) | null) => setAgentWriteRaw({ fn }),
+    [],
+  );
+  /** Type something into the live agent session. Returns false when there is
+   *  no session to type into. */
+  const sendToAgent = useCallback(
+    (text: string) => {
+      const w = agentWrite.fn;
+      if (!w || !text.trim()) return false;
+      // A newline is what submits in every agent CLI's own prompt.
+      w(`${text.trim()}\r`);
+      return true;
+    },
+    [agentWrite],
+  );
   const [liveNotifs, setLiveNotifs] = useState<import("@bulletz/shared").Notification[]>([]);
   const [localNotifs, setLocalNotifs] = useState<LocalNotification[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, { unread: number; mentions: number }>>({});
@@ -482,9 +500,6 @@ function Workspace({
   const [showArchived, setShowArchived] = useState(
     () => localStorage.getItem("bulletz.showArchived") === "1",
   );
-  const [agentRun, setAgentRun] = useState<{ channelId: string; status: string } | null>(null);
-  const [transcripts, setTranscripts] = useState<Record<string, AgentRunEvent[]>>({});
-  const [agentBusy, setAgentBusy] = useState(false);
   const [policy, setPolicy] = useState<AgentPolicy | null>(null);
   const [surface, setSurface] = useState<"chat" | "apps">(
     () => (localStorage.getItem("bulletz.surface") as "chat" | "apps") ?? "chat",
@@ -694,69 +709,40 @@ function Workspace({
     });
   }, []);
 
-  useEffect(() => {
-    const b = bridge();
-    if (!b?.agent) return;
-    // The policy file is the source of truth and can change outside this
-    // window, so re-read it on focus rather than trusting a mount-time copy —
-    // a chip that lies about whether chat can start a run is worse than none.
-    const refresh = () => void b.agent?.policy().then(setPolicy);
-    refresh();
-    window.addEventListener("focus", refresh);
-    const off = b.agent.onEvent((channelId, e: AgentRunEvent) => {
-      const status =
-        e.type === "start" ? `running · ${e.model}`
-        : e.type === "tool" ? `${e.name}…`
-        : e.type === "text" ? "writing…"
-        : e.type === "end" ? `done${e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}`
-        : e.type === "error" ? `error: ${e.message.slice(0, 90)}`
-        : "working…";
-      setAgentRun({ channelId, status });
-      setTranscripts((prev) => ({ ...prev, [channelId]: [...(prev[channelId] ?? []), e] }));
-      if (e.type === "start") setAgentBusy(true);
-      if (e.type === "end" || e.type === "error") {
-        setAgentBusy(false);
-        setTimeout(() => setAgentRun(null), 6000);
-      }
-    });
-    return () => {
-      window.removeEventListener("focus", refresh);
-      off();
-    };
-  }, []);
-
   /** Hand one message to the agent, with an instruction.
    *
    *  The quoted text goes in the prompt so the agent has it immediately, and
    *  the ids go with it so it can pull the surrounding conversation itself
    *  rather than being handed a wall of context it may not need. */
+  /**
+   * Send a highlighted message into the live agent session.
+   *
+   * Typed in as text rather than dispatched as a job: the agent is a
+   * conversation now, so this is the same thing you would have typed, and you
+   * can carry on talking to it afterwards.
+   */
   const askAgent = useCallback(
     async (ev: Event, instruction: string) => {
       if (!activeId) return;
-      const b = bridge();
-      if (!b?.agent) {
-        await api.postMessage(activeId, "_Agent runs need the desktop app._");
-        return;
-      }
       const prompt = [
-        "A teammate highlighted one message in this channel and asked you to act on it.",
+        `In this workspace channel, ${ev.actor_handle} wrote (message id ${ev.id}):`,
         "",
-        `--- message from ${ev.actor_handle} at ${ev.created_at} (id ${ev.id}) ---`,
         ev.body ?? "",
-        "--- end of message ---",
         "",
-        `Their instruction: ${instruction}`,
+        instruction,
         "",
-        `Reply in that message's own thread: call post_message with reply_to "${ev.id}",`,
-        "so the answer sits under what was asked instead of landing loose in the channel.",
-        "Use get_channel or search_context first if you need the surrounding conversation.",
+        `When you answer, call post_message with reply_to "${ev.id}" so it lands`,
+        "under that message rather than loose in the channel.",
       ].join("\n");
 
-      setTranscripts((prev) => ({ ...prev, [activeId]: [] }));
-      const r = await b.agent.run(activeId, prompt, true, { id: me.id, handle: me.handle });
-      if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
+      if (!sendToAgent(prompt)) {
+        await api.postMessage(
+          activeId,
+          "_No agent session running. Open the Agent tab below._",
+        );
+      }
     },
-    [activeId, api, me],
+    [activeId, api, sendToAgent],
   );
 
   const voice = useVoice(socket, peerId, api.baseUrl, api.authToken);
@@ -816,17 +802,17 @@ function Workspace({
         ...(link[4] ? { notes: link[4].trim() } : {}),
       });
     } else if (/^@agent\s+/.test(text)) {
-      // Post the ask first, so the record shows who asked what even if local
-      // policy refuses the run or the agent fails.
+      // Post the ask first, so the record shows who asked what even if the
+      // agent is not running locally.
       await api.postMessage(activeId, text);
       const prompt = text.replace(/^@agent\s+/, "").trim();
-      const b = bridge();
-      if (!b?.agent) {
-        await api.postMessage(activeId, "_Agent runs need the desktop app._");
-      } else {
-        setTranscripts((prev) => ({ ...prev, [activeId]: [] }));
-        const r = await b.agent.run(activeId, prompt, true, { id: me.id, handle: me.handle });
-        if (!r.ok) await api.postMessage(activeId, `_Agent not started: ${r.error}_`);
+      // The agent is a live session now, not a one-shot run: the ask is typed
+      // into it the way you would type it yourself, and you can keep talking.
+      if (!sendToAgent(prompt)) {
+        await api.postMessage(
+          activeId,
+          "_No agent session running. Open the Agent tab below._",
+        );
       }
     } else if (task?.[1]) {
       await api.createTask({ title: task[1].trim(), channel_id: activeId });
@@ -1041,19 +1027,6 @@ function Workspace({
               onAskAgent={askAgent}
             />
           </div>
-          {agentRun?.channelId === activeId && (
-            <div className="agent-strip">
-              <span className="agent-dot" />
-              <span>agent · {agentRun.status}</span>
-              <button
-                className="icon-btn"
-                title="Stop this run"
-                onClick={() => void bridge()?.agent?.stop(activeId!)}
-              >
-                ■
-              </button>
-            </div>
-          )}
           <Composer disabled={!activeId} onSubmit={submit} policy={policy} onPolicy={setPolicy} />
         </div>
         </>
@@ -1095,12 +1068,7 @@ function Workspace({
 
       {/* Workbench-level, outside the surface switch: unmounting the terminal
           kills its pty, so a running job must survive Chat <-> Apps. */}
-      <TerminalDock
-        transcript={(activeId && transcripts[activeId]) || []}
-        running={agentBusy && agentRun?.channelId === activeId}
-        onStop={() => activeId && void bridge()?.agent?.stop(activeId)}
-        me={me}
-      />
+      <TerminalDock onAgentReady={setAgentWrite} />
     </div>
   );
 }
@@ -1117,174 +1085,13 @@ function Workspace({
  *  It lives in the dock rather than the Apps rail on purpose — Apps is shared
  *  ground, and none of this is. Transcripts never leave the machine and the
  *  list is scoped to the person who ran them. */
-function AgentPane({
-  transcript,
-  running,
-  onStop,
-  me,
-}: {
-  transcript: AgentRunEvent[];
-  running: boolean;
-  onStop: () => void;
-  me: { id: string; handle: string };
-}) {
-  const [history, setHistory] = useState<AgentSessionSummary[]>([]);
-  const [picked, setPicked] = useState<string | null>(null);
-  const [past, setPast] = useState<AgentSession | null>(null);
-  const end = useRef<HTMLDivElement>(null);
-  const agent = bridge()?.agent;
-
-  const refresh = useCallback(() => {
-    void agent?.sessions(me.id).then(setHistory);
-  }, [agent, me.id]);
-
-  useEffect(refresh, [refresh]);
-  // A finished run becomes history, so reload when the live one stops.
-  useEffect(() => {
-    if (!running) refresh();
-  }, [running, refresh]);
-
-  // A new live run always takes focus back from whatever was being read.
-  useEffect(() => {
-    if (running) setPicked(null);
-  }, [running]);
-
-  useEffect(() => {
-    if (!picked) return setPast(null);
-    void agent?.session(picked, me.id).then(setPast);
-  }, [picked, agent, me.id]);
-
-  const events: AgentRunEvent[] = picked ? (past?.events ?? []) : transcript;
-  useEffect(() => {
-    if (!picked) end.current?.scrollIntoView({ block: "end" });
-  }, [events.length, picked]);
-
-  return (
-    <div className="agent-pane">
-      <div className="agent-pane-bar">
-        <span className={`agent-pane-dot${running ? " live" : ""}`} />
-        <span>
-          {picked
-            ? `${past?.status ?? "run"}${past?.costUsd ? ` · $${past.costUsd.toFixed(3)}` : ""}`
-            : running
-              ? "working locally"
-              : "idle"}
-        </span>
-        {picked && past?.sessionId && (
-          <code className="agent-resume" title="Resume this session in the terminal">
-            claude --resume {past.sessionId}
-          </code>
-        )}
-        <span className="agent-pane-note">private · yours · never synced</span>
-        {running && !picked && (
-          <button className="icon-btn" onClick={onStop} title="Stop this run">
-            ■
-          </button>
-        )}
-      </div>
-
-      <div className="agent-split">
-        <div className="agent-history">
-          <button
-            className={`agent-hist-row${picked === null ? " active" : ""}`}
-            onClick={() => setPicked(null)}
-          >
-            <span className="agent-hist-title">{running ? "Live run" : "Current"}</span>
-            <span className="agent-hist-meta">
-              {running ? "running" : `${transcript.length} events`}
-            </span>
-          </button>
-          {history.map((h) => (
-            <button
-              key={h.id}
-              className={`agent-hist-row${picked === h.id ? " active" : ""}`}
-              onClick={() => setPicked(h.id)}
-            >
-              <span className="agent-hist-title">{h.prompt}</span>
-              <span className="agent-hist-meta">
-                <span className={`session-status ${h.status}`}>{h.status}</span>
-                {new Date(h.startedAt).toLocaleString([], {
-                  month: "short",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-                {h.costUsd !== null && ` · $${h.costUsd.toFixed(3)}`}
-              </span>
-            </button>
-          ))}
-          {history.length === 0 && <div className="empty" style={{ padding: "8px 12px" }}>no past runs</div>}
-        </div>
-
-        <div className="agent-pane-body">
-          {events.length === 0 && (
-            <div className="empty" style={{ padding: "10px 14px" }}>
-              {picked ? "Nothing recorded for this run." : (
-                <>
-                  Nothing yet. Start a run with <code>@agent</code> in a channel.
-                </>
-              )}
-            </div>
-          )}
-          {events.map((e, i) => {
-            if (e.type === "start")
-              return (
-                <div className="turn-rule" key={i}>
-                  <span>turn started · {e.model}</span>
-                </div>
-              );
-            if (e.type === "end")
-              return (
-                <div className="turn-rule" key={i}>
-                  <span>
-                    {e.subtype}
-                    {e.costUsd ? ` · $${e.costUsd.toFixed(3)}` : ""}
-                    {e.turns ? ` · ${e.turns} turns` : ""}
-                  </span>
-                </div>
-              );
-            if (e.type === "tool")
-              return (
-                <div className="agent-tool" key={i}>
-                  <span className="agent-tool-name">{e.name}</span>
-                  <span className="agent-tool-args">{JSON.stringify(e.input ?? {}).slice(0, 160)}</span>
-                </div>
-              );
-            if (e.type === "tool_result")
-              return (
-                <div className={`agent-result${e.ok ? "" : " bad"}`} key={i}>
-                  {e.ok ? "ok" : "error"}
-                </div>
-              );
-            if (e.type === "error")
-              return (
-                <div className="agent-err" key={i}>
-                  {e.message}
-                </div>
-              );
-            return (
-              <div className="agent-text" key={i}>
-                {e.text}
-              </div>
-            );
-          })}
-          <div ref={end} />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function TerminalDock({
-  transcript,
-  running,
-  onStop,
-  me,
+  onAgentReady,
 }: {
-  transcript: AgentRunEvent[];
-  running: boolean;
-  onStop: () => void;
-  me: { id: string; handle: string };
+  /** Handed the agent session's writer, so a highlighted message can be sent
+   *  into it from the chat pane above. */
+  onAgentReady: (write: ((data: string) => void) | null) => void;
 }) {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
   // Both docked panes are desktop-only — a pty and a local agent — so in a
@@ -1299,14 +1106,6 @@ function TerminalDock({
     () => (localStorage.getItem("bulletz.dockTab") as "terminal" | "agent") ?? "terminal",
   );
   const [dragging, setDragging] = useState(false);
-  const prevLen = useRef(0);
-
-  // Surface the agent tab when a run starts producing, so private work is not
-  // invisible work — but never steal the tab away from a terminal in use.
-  useEffect(() => {
-    if (transcript.length > prevLen.current && prevLen.current === 0) setTab("agent");
-    prevLen.current = transcript.length;
-  }, [transcript.length]);
 
   useEffect(() => localStorage.setItem("bulletz.termH", String(height)), [height]);
   useEffect(() => localStorage.setItem("bulletz.termOpen", open ? "1" : "0"), [open]);
@@ -1350,10 +1149,6 @@ function TerminalDock({
               onClick={() => setTab("agent")}
             >
               Agent
-              {running && <span className="tab-dot" />}
-              {!running && transcript.length > 0 && (
-                <span className="tab-count">{transcript.length}</span>
-              )}
             </button>
           </div>
           <button className="icon-btn" onClick={() => setOpen((v) => !v)} title={open ? "Hide" : "Show"}>
@@ -1366,7 +1161,7 @@ function TerminalDock({
           <TerminalPane id="main" />
         </div>
         {open && tab === "agent" && (
-          <AgentPane transcript={transcript} running={running} onStop={onStop} me={me} />
+          <TerminalPane id="agent" kind="agent" onReady={onAgentReady} />
         )}
       </div>
     </>

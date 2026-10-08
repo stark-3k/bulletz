@@ -4,10 +4,11 @@ import { resolveServer } from "./server.ts";
 import { bridge } from "./Terminal.tsx";
 import { updateStatus, type UpdateStatus } from "./updates.ts";
 
-type Tab = "account" | "notifications" | "security" | "tokens";
+type Tab = "account" | "agent" | "notifications" | "security" | "tokens";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "account", label: "Account" },
+  { id: "agent", label: "Agent" },
   { id: "notifications", label: "Notifications" },
   { id: "security", label: "Security" },
   { id: "tokens", label: "API tokens" },
@@ -89,6 +90,7 @@ export function Settings({
             {err && <div className="form-err">{err}</div>}
             {note && <div className="form-note">{note}</div>}
             {tab === "account" && <Account api={api} me={me} run={run} />}
+            {tab === "agent" && <AgentSettings run={run} />}
             {tab === "notifications" && <Notifications api={api} run={run} />}
             {tab === "security" && <Security api={api} run={run} onSignOut={onSignOut} />}
             {tab === "tokens" && <Tokens api={api} run={run} />}
@@ -590,6 +592,127 @@ function AppVersion() {
           </a>
         )}
       </div>
+    </>
+  );
+}
+
+
+type AgentCmd = { command: string; args: string[] };
+type AgentInfo = {
+  configured: AgentCmd | null;
+  resolved: AgentCmd | null;
+  presets: { id: string; label: string; cmd: AgentCmd; installed: boolean }[];
+};
+
+/**
+ * Which coding agent the Agent tab runs.
+ *
+ * Deliberately a command rather than a list of supported vendors. The whole
+ * premise is that the workspace does not care which agent you use — it holds
+ * the team's memory and hands it over through MCP — so anything that runs in
+ * a terminal belongs here, including agents that do not exist yet.
+ */
+function AgentSettings({ run }: { run: Run }) {
+  const [info, setInfo] = useState<AgentInfo | null>(null);
+  const [draft, setDraft] = useState("");
+
+  const load = useCallback(async () => {
+    const b = bridge();
+    if (!b?.agent?.command) return;
+    const r = await b.agent.command();
+    setInfo(r);
+    const cur = r.configured ?? r.resolved;
+    setDraft(cur ? [cur.command, ...cur.args].join(" ") : "");
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (!info) {
+    return (
+      <>
+        <h4>Agent</h4>
+        <p className="muted">
+          The agent runs on your machine, so this is a desktop-app setting. The web UI has no
+          terminal to run one in.
+        </p>
+      </>
+    );
+  }
+
+  const save = (text: string) =>
+    void run(async () => {
+      const parts = text.trim().split(/\s+/).filter(Boolean);
+      const b = bridge();
+      await b?.agent?.command?.(parts.length ? { command: parts[0]!, args: parts.slice(1) } : null);
+      await load();
+      return parts.length ? `Agent set to ${parts[0]}.` : "Cleared — the first one found will be used.";
+    });
+
+  const active = info.configured ?? info.resolved;
+
+  return (
+    <>
+      <h4>Coding agent</h4>
+      <p className="muted">
+        The Agent tab runs this command in a terminal, so you get that agent&apos;s own interface —
+        interactive, and interruptible with Ctrl-C. It inherits the workspace&apos;s MCP config, so
+        whatever you run can read the team&apos;s memory.
+      </p>
+
+      <div className="row">
+        <code className="server-inline">
+          {active ? [active.command, ...active.args].join(" ") : "none found"}
+        </code>
+        {!info.configured && active && <span className="muted">found on your PATH</span>}
+      </div>
+
+      <label className="field">
+        <span>Command</span>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save(draft);
+          }}
+          placeholder="claude"
+          spellCheck={false}
+        />
+        <em>Arguments are allowed. Leave empty to use whichever is found first.</em>
+      </label>
+      <div className="row">
+        <button className="send" onClick={() => save(draft)}>
+          Save
+        </button>
+        {info.configured && (
+          <button className="ghost" onClick={() => save("")}>
+            Reset
+          </button>
+        )}
+      </div>
+
+      <h4 className="spaced">Found on this machine</h4>
+      <div className="rows">
+        {info.presets.map((p) => (
+          <div key={p.id} className="rowitem">
+            <div className="rowitem-main">
+              <strong>{p.label}</strong>
+              <span className="muted">{p.cmd.command}</span>
+            </div>
+            {p.installed ? (
+              <button className="ghost" onClick={() => save([p.cmd.command, ...p.cmd.args].join(" "))}>
+                Use
+              </button>
+            ) : (
+              <span className="muted">not installed</span>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="muted" style={{ marginTop: 10 }}>
+        This list is a convenience, not a limit — type any command above.
+      </p>
     </>
   );
 }

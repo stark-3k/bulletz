@@ -11,8 +11,8 @@ contextBridge.exposeInMainWorld("bulletz", {
   initialServer,
   isDesktop: true,
   term: {
-    spawn: (id: string, cols: number, rows: number) =>
-      ipcRenderer.invoke("term:spawn", { id, cols, rows }),
+    spawn: (id: string, cols: number, rows: number, kind?: "shell" | "agent") =>
+      ipcRenderer.invoke("term:spawn", { id, cols, rows, kind }),
     write: (id: string, data: string) => ipcRenderer.send("term:write", { id, data }),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.send("term:resize", { id, cols, rows }),
@@ -50,28 +50,15 @@ contextBridge.exposeInMainWorld("bulletz", {
       ipcRenderer.invoke("project:choose") as Promise<{ dir: string; changed: boolean }>,
   },
   agent: {
+    command: (patch?: { command: string; args: string[] } | null) =>
+      ipcRenderer.invoke("agent:command", patch) as Promise<{
+        configured: { command: string; args: string[] } | null;
+        resolved: { command: string; args: string[] } | null;
+        presets: { id: string; label: string; cmd: { command: string; args: string[] }; installed: boolean }[];
+      }>,
     setToken: (token: string | null) =>
       ipcRenderer.invoke("agent:token", token) as Promise<boolean>,
     hasToken: () => ipcRenderer.invoke("agent:token") as Promise<boolean>,
-    run: (channelId: string, prompt: string, byOwner: boolean, actor?: { id: string; handle: string }) =>
-      ipcRenderer.invoke("agent:run", {
-        channelId,
-        prompt,
-        byOwner,
-        actorId: actor?.id,
-        actorHandle: actor?.handle,
-      }) as Promise<{ ok: boolean; error?: string }>,
-    stop: (channelId: string) => ipcRenderer.invoke("agent:stop", { channelId }),
-    status: (channelId: string) =>
-      ipcRenderer.invoke("agent:status", { channelId }) as Promise<{ running: boolean }>,
-    policy: (patch?: unknown) => ipcRenderer.invoke("agent:policy", patch),
-    sessions: (actorId: string) => ipcRenderer.invoke("agent:sessions", { actorId }),
-    session: (id: string, actorId: string) => ipcRenderer.invoke("agent:session", { id, actorId }),
-    onEvent: (cb: (channelId: string, e: unknown) => void) => {
-      const h = (_e: unknown, p: { channelId: string; event: unknown }) => cb(p.channelId, p.event);
-      ipcRenderer.on("agent:event", h);
-      return () => ipcRenderer.removeListener("agent:event", h);
-    },
   },
   screen: {
     sources: () =>

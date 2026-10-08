@@ -12,7 +12,15 @@ type Bridge = {
       id: string,
       cols: number,
       rows: number,
-    ) => Promise<{ cwd: string; shell: string; replay: string; reattached: boolean }>;
+      kind?: "shell" | "agent",
+    ) => Promise<{
+      cwd: string;
+      shell: string;
+      replay: string;
+      reattached: boolean;
+      /** Set when an agent pane could not start — no agent command found. */
+      error?: string;
+    }>;
     write: (id: string, data: string) => void;
     resize: (id: string, cols: number, rows: number) => void;
     kill: (id: string) => void;
@@ -34,6 +42,11 @@ type Bridge = {
     choose: () => Promise<{ dir: string; changed: boolean }>;
   };
   agent?: {
+    command?: (patch?: { command: string; args: string[] } | null) => Promise<{
+      configured: { command: string; args: string[] } | null;
+      resolved: { command: string; args: string[] } | null;
+      presets: { id: string; label: string; cmd: { command: string; args: string[] }; installed: boolean }[];
+    }>;
     setToken?: (token: string | null) => Promise<boolean>;
     hasToken?: () => Promise<boolean>;
     run: (
@@ -122,11 +135,25 @@ const THEME = {
   brightWhite: "#f0f3f8",
 };
 
-export function TerminalPane({ id }: { id: string }) {
+export function TerminalPane({
+  id,
+  kind = "shell",
+  onReady,
+}: {
+  id: string;
+  /** "agent" runs the configured coding agent instead of a login shell. The
+   *  pane is identical either way — a pty is a pty — which is the point: the
+   *  agent gets its own interface rather than one we invented for it. */
+  kind?: "shell" | "agent";
+  /** Hands back a writer so other parts of the app can type into this
+   *  session — sending a highlighted message to the agent, for instance. */
+  onReady?: (write: ((data: string) => void) | null) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const [cwd, setCwd] = useState<string>("");
   const [exited, setExited] = useState<number | null>(null);
   const [reattached, setReattached] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   // Bumping this tears the view down and builds a fresh one, which is what a
   // restart is: the old pty is already gone, so spawn makes a new shell.
   const [generation, setGeneration] = useState(0);
@@ -164,13 +191,22 @@ export function TerminalPane({ id }: { id: string }) {
       term.write(`\r\n\x1b[90m[process exited with code ${code} — press Enter to start a new shell]\x1b[0m\r\n`);
     });
 
-    void api.term.spawn(id, term.cols, term.rows).then((info) => {
+    void api.term.spawn(id, term.cols, term.rows, kind).then((info) => {
       if (disposed) return;
+      if (info.error) {
+        // No agent command found. Say so in the pane rather than failing with
+        // a bare ENOENT that points at nothing.
+        setStartError(info.error);
+        term.write(`\r\n\x1b[33m${info.error}\x1b[0m\r\n`);
+        return;
+      }
       setCwd(info.cwd);
       // Hand back the output this view missed, so a reload resumes the session
       // instead of staring at a blank screen with a live job behind it.
       if (info.replay) term.write(info.replay);
       setReattached(info.reattached);
+      // Expose a writer so a highlighted message can be sent straight in.
+      onReady?.((data: string) => api.term.write(id, data));
     });
 
     term.onData((d) => {
@@ -194,6 +230,7 @@ export function TerminalPane({ id }: { id: string }) {
 
     return () => {
       disposed = true;
+      onReady?.(null);
       ro.disconnect();
       offData();
       offExit();
@@ -219,9 +256,14 @@ export function TerminalPane({ id }: { id: string }) {
   return (
     <div className="term-wrap">
       <div className="term-bar">
-        <span className="term-dot" />
-        <span className="term-cwd">{cwd || "starting…"}</span>
+        <span className={`term-dot${startError ? " off" : ""}`} />
+        <span className="term-cwd">{startError ? "no agent configured" : cwd || "starting…"}</span>
         {reattached && exited === null && <span className="term-reattached">reattached</span>}
+        {startError && (
+          // Restarting cannot help until a command exists, so point at the
+          // thing that can.
+          <span className="term-exit">Settings → Agent</span>
+        )}
         {exited !== null && (
           <>
             <span className="term-exit">exited {exited}</span>
