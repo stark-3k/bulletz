@@ -284,6 +284,7 @@ export class Api {
   widgetData = (id: string) => this.call<{ rows: unknown[]; ms: number }>("GET", `/widgets/${id}/data`);
   widgetHtml = (id: string) => this.call<{ html: string }>("GET", `/widgets/${id}/html`);
   activateWidget = (id: string) => this.call("POST", `/widgets/${id}/activate`, {});
+  deleteWidget = (id: string) => this.call<{ removed: { id: string; name: string } }>("DELETE", `/widgets/${id}`);
   tools = () => this.call<{ tools: unknown[] }>("GET", "/tools");
   activateTool = (id: string) => this.call("POST", `/tools/${id}/activate`, {});
 

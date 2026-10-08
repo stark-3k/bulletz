@@ -272,4 +272,9 @@ export type ServerMessage =
       notification: Notification;
     }
   | { type: "presence"; actor_handle: string; online: boolean }
+  /** The set of published apps changed — one was published, activated, or
+   *  removed. Deliberately carries no payload: the Apps rail shows active
+   *  widgets and the registry shows all of them, and refetching both is
+   *  cheaper than keeping two lists in sync from deltas. */
+  | { type: "widget" }
   | { type: "error"; message: string };

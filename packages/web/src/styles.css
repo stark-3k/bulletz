@@ -446,6 +446,17 @@ button { font: inherit; cursor: pointer; }
 
 .w-frame { width: 100%; border: 0; display: block; background: transparent; }
 
+/* Registry row actions. Remove is deliberately quiet until it is armed: the
+   destructive click should be the second one, and should look like it. */
+.registry-actions { display: flex; align-items: center; gap: 8px; }
+.registry-remove { background: none; border: 1px solid var(--line); color: var(--fg-dim);
+                   border-radius: 6px; padding: 3px 9px; font-size: 11.5px; cursor: pointer; }
+.registry-remove:hover { color: var(--danger); border-color: var(--danger); }
+.registry-remove.armed { color: #fff; background: var(--danger); border-color: var(--danger); }
+.registry-remove:disabled { opacity: .6; cursor: default; }
+.registry-cancel { background: none; border: 0; color: var(--fg-dim); font-size: 11.5px; cursor: pointer; }
+.registry-cancel:hover { color: var(--fg); }
+
 /* A framed site gets real height — it is a page, not a readout — and its own
    white ground is clipped to the widget's corners rather than bleeding. */
 .w-embed { position: relative; height: 70vh; min-height: 420px; border-radius: 10px;

@@ -38,6 +38,14 @@ export function Apps({
   const active = widgets.filter((w) => w.status === "active");
   const isSel = (a: AppId) => sel.type === a.type && sel.id === a.id;
 
+  // Removing the app you are looking at — or a teammate removing it while you
+  // are — would otherwise leave the pane rendering a widget that no longer
+  // exists. Fall back to the board rather than to an empty frame.
+  useEffect(() => {
+    if (sel.type !== "widget") return;
+    if (!widgets.some((w) => w.id === sel.id)) setSel({ type: "builtin", id: "board" });
+  }, [widgets, sel]);
+
   return (
     <div className="apps">
       <div className="apps-rail">
@@ -436,6 +444,22 @@ function Registry({
     onChange();
   };
 
+  // Two clicks, inline. Not window.confirm(): a native modal blocks the whole
+  // renderer, and this app has already been bitten once by assuming the
+  // browser dialogs exist here.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const remove = async (w: WidgetRow) => {
+    setBusy(true);
+    try {
+      await api.deleteWidget(w.id);
+      setConfirming(null);
+      onChange();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="registry">
       <div className="app-head">
@@ -449,8 +473,12 @@ function Registry({
             <div className="registry-main">
               <div className="registry-name">
                 {w.view?.title ?? w.name}
-                <span className={`registry-kind${w.kind === "html" ? " html" : ""}`}>
-                  {w.kind === "html" ? "custom html" : (w.view?.type ?? "view")}
+                <span className={`registry-kind${w.kind === "view" ? "" : " html"}`}>
+                  {w.kind === "html"
+                    ? "custom html"
+                    : w.kind === "embed"
+                      ? "embedded site"
+                      : (w.view?.type ?? "view")}
                 </span>
                 {w.status === "draft" && <span className="tag">draft</span>}
               </div>
@@ -460,13 +488,29 @@ function Registry({
                 {w.view?.refresh_ms ? ` · refresh ${Math.round(w.view.refresh_ms / 1000)}s` : ""}
               </div>
             </div>
-            {w.status === "draft" ? (
-              <button className="widget-activate" onClick={() => void activate(w)}>
-                Activate
-              </button>
-            ) : (
-              <span className="registry-ok">active</span>
-            )}
+            <div className="registry-actions">
+              {w.status === "draft" ? (
+                <button className="widget-activate" onClick={() => void activate(w)}>
+                  Activate
+                </button>
+              ) : (
+                <span className="registry-ok">active</span>
+              )}
+              {confirming === w.id ? (
+                <>
+                  <button className="registry-remove armed" disabled={busy} onClick={() => void remove(w)}>
+                    {busy ? "removing…" : "Remove for everyone"}
+                  </button>
+                  <button className="registry-cancel" onClick={() => setConfirming(null)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button className="registry-remove" onClick={() => setConfirming(w.id)}>
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>

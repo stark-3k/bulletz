@@ -238,6 +238,7 @@ export async function widgetRoutes(app: FastifyInstance) {
       payload: { widget_id: (widget as { id: string }).id, kind: input.kind },
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
+    broadcast(req.actor.workspace_id, { type: "widget" });
     return reply.code(201).send({ widget });
   });
 
@@ -250,6 +251,10 @@ export async function widgetRoutes(app: FastifyInstance) {
       [req.actor.workspace_id, id],
     );
     if (!widget) return reply.code(404).send({ error: "widget not found" });
+    // Activation is what puts an app in everyone's rail, so it is the moment
+    // other windows need to hear about — without this a teammate sees nothing
+    // until they reload.
+    broadcast(req.actor.workspace_id, { type: "widget" });
     return { widget };
   });
 
@@ -263,6 +268,41 @@ export async function widgetRoutes(app: FastifyInstance) {
     );
     if (!widget) return reply.code(404).send({ error: "widget not found" });
     return { widget };
+  });
+
+  /**
+   * Remove a published app.
+   *
+   * A real delete, not a status flip: a widget is a piece of UI someone put
+   * in the workspace, and "I don't want this here any more" should leave
+   * nothing behind to explain. The event log still records that it existed
+   * and that it went — the row is a current-state table, the log is the
+   * history, and deleting from the first does not rewrite the second.
+   *
+   * Gated on `activate` rather than `write` for the same reason publishing is:
+   * agents draft and humans decide what the workspace contains. An agent that
+   * could delete widgets could delete the one reporting on it.
+   */
+  app.delete("/widgets/:id", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    if (!allow(req, reply, "activate")) return reply;
+    const widget = await maybeOne<{ id: string; name: string; kind: string }>(
+      `delete from widgets where workspace_id = $1 and id = $2 returning id, name, kind`,
+      [req.actor.workspace_id, id],
+    );
+    if (!widget) return reply.code(404).send({ error: "widget not found" });
+
+    const event = await appendEvent({
+      workspaceId: req.actor.workspace_id,
+      channelId: null,
+      actorId: req.actor.id,
+      kind: "widget_removed",
+      body: widget.name,
+      payload: { widget_id: widget.id, kind: widget.kind },
+    });
+    broadcast(req.actor.workspace_id, { type: "event", event });
+    broadcast(req.actor.workspace_id, { type: "widget" });
+    return { removed: widget };
   });
 
   app.get("/widgets/:id/html", async (req, reply) => {
