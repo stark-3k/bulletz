@@ -484,11 +484,46 @@ function Workspace({
     (text: string) => {
       const w = agentWrite.fn;
       if (!w || !text.trim()) return false;
-      // A newline is what submits in every agent CLI's own prompt.
-      w(`${text.trim()}\r`);
+      // Bracketed paste, not raw text. A newline typed into a terminal UI is
+      // Enter, so a multi-line prompt written literally would be submitted
+      // one line at a time — seven half-questions instead of one. Wrapping it
+      // in the paste markers is how a terminal says "this is one block", and
+      // every TUI that accepts pasted input understands them.
+      const body = text.trim().replace(/\r\n?/g, "\n");
+      w(`\x1b[200~${body}\x1b[201~`);
+      // Submit separately, once, after the paste has landed.
+      setTimeout(() => w("\r"), 60);
       return true;
     },
     [agentWrite],
+  );
+
+  /**
+   * Tell the agent where it is before asking it anything.
+   *
+   * The previous runner did this with --append-system-prompt, which only one
+   * vendor understands. A live session has no such hook — so the context
+   * travels in the message itself, which every agent understands because it
+   * is just text. Without it the agent is connected to the workspace over MCP
+   * and has no idea it should look.
+   */
+  const framedAsk = useCallback(
+    (ask: string, replyTo?: string) => {
+      const channel = channels.find((c) => c.id === activeId);
+      return [
+        `[bulletz] You are connected to this team's workspace over MCP as \`bulletz\`.`,
+        `Channel: ${channel?.title ?? "unknown"} (id ${activeId}).`,
+        "Call context_pack first — it returns the project summary, the decisions in",
+        "force and the active constraints. Use get_channel or search_context for the",
+        "surrounding conversation.",
+        replyTo
+          ? `Answer by calling post_message with channel_id "${activeId}" and reply_to "${replyTo}".`
+          : `Answer by calling post_message with channel_id "${activeId}".`,
+        "",
+        ask,
+      ].join("\n");
+    },
+    [activeId, channels],
   );
   const [liveNotifs, setLiveNotifs] = useState<import("@bulletz/shared").Notification[]>([]);
   const [localNotifs, setLocalNotifs] = useState<LocalNotification[]>([]);
@@ -724,16 +759,10 @@ function Workspace({
   const askAgent = useCallback(
     async (ev: Event, instruction: string) => {
       if (!activeId) return;
-      const prompt = [
-        `In this workspace channel, ${ev.actor_handle} wrote (message id ${ev.id}):`,
-        "",
-        ev.body ?? "",
-        "",
-        instruction,
-        "",
-        `When you answer, call post_message with reply_to "${ev.id}" so it lands`,
-        "under that message rather than loose in the channel.",
-      ].join("\n");
+      const prompt = framedAsk(
+        [`${ev.actor_handle} wrote:`, "", ev.body ?? "", "", instruction].join("\n"),
+        ev.id,
+      );
 
       if (!sendToAgent(prompt)) {
         await api.postMessage(
@@ -742,7 +771,7 @@ function Workspace({
         );
       }
     },
-    [activeId, api, sendToAgent],
+    [activeId, api, sendToAgent, framedAsk],
   );
 
   const voice = useVoice(socket, peerId, api.baseUrl, api.authToken);
@@ -808,7 +837,7 @@ function Workspace({
       const prompt = text.replace(/^@agent\s+/, "").trim();
       // The agent is a live session now, not a one-shot run: the ask is typed
       // into it the way you would type it yourself, and you can keep talking.
-      if (!sendToAgent(prompt)) {
+      if (!sendToAgent(framedAsk(prompt))) {
         await api.postMessage(
           activeId,
           "_No agent session running. Open the Agent tab below._",
