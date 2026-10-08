@@ -39,11 +39,19 @@ const ViewSpec = z.object({
 const WidgetInput = z.object({
   name: z.string().min(2).max(64),
   description: z.string().max(500).optional(),
-  kind: z.enum(["view", "html"]),
+  kind: z.enum(["view", "html", "embed"]),
   tool: z.string().optional(),
   tool_args: z.record(z.unknown()).default({}),
   view: ViewSpec.optional(),
   html: z.string().max(400_000).optional(),
+  // A framed site. http/https only: a javascript: or data: URL in a frame is
+  // script execution, and "a human activates it" is not a parser.
+  url: z
+    .string()
+    .url()
+    .max(2000)
+    .refine((u) => /^https?:$/.test(new URL(u).protocol), "url must be http or https")
+    .optional(),
   channel_id: z.string().uuid().optional(),
 });
 
@@ -171,7 +179,7 @@ export async function widgetRoutes(app: FastifyInstance) {
 
   app.get("/widgets", async (req) => ({
     widgets: await q(
-      `select w.id, w.name, w.description, w.kind, w.tool_id, w.tool_args, w.view,
+      `select w.id, w.name, w.description, w.kind, w.tool_id, w.tool_args, w.view, w.url,
               w.status, w.pinned, w.created_at, t.name as tool_name, t.status as tool_status,
               a.handle as created_by_handle
          from widgets w
@@ -191,18 +199,22 @@ export async function widgetRoutes(app: FastifyInstance) {
     if (input.kind === "html" && !input.html) {
       return reply.code(400).send({ error: "html widgets require html" });
     }
+    if (input.kind === "embed" && !input.url) {
+      return reply.code(400).send({ error: "embed widgets require a url" });
+    }
 
     const tool = input.tool ? await getTool(req.actor.workspace_id, input.tool) : null;
     if (input.tool && !tool) return reply.code(404).send({ error: `tool not found: ${input.tool}` });
 
     const widget = await one(
-      `insert into widgets (workspace_id, name, description, kind, tool_id, tool_args, view, html, created_by)
-       values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9)
+      `insert into widgets (workspace_id, name, description, kind, tool_id, tool_args, view, html, url, created_by)
+       values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10)
        on conflict (workspace_id, name) do update
          set description = excluded.description, kind = excluded.kind,
              tool_id = excluded.tool_id, tool_args = excluded.tool_args,
-             view = excluded.view, html = excluded.html, status = 'draft'
-       returning id, name, description, kind, tool_id, tool_args, view, status, pinned, created_at`,
+             view = excluded.view, html = excluded.html, url = excluded.url,
+             status = 'draft'
+       returning id, name, description, kind, tool_id, tool_args, view, url, status, pinned, created_at`,
       [
         req.actor.workspace_id,
         input.name,
@@ -212,6 +224,7 @@ export async function widgetRoutes(app: FastifyInstance) {
         JSON.stringify(input.tool_args),
         input.view ? JSON.stringify(input.view) : null,
         input.html ?? null,
+        input.url ?? null,
         req.actor.id,
       ],
     );

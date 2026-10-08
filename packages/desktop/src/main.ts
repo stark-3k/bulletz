@@ -49,6 +49,21 @@ function projectRoot(): string {
 }
 
 /**
+ * Did anyone actually choose this folder, or is it only the fallback?
+ *
+ * The difference matters for anything that runs a process. An installed app
+ * with no choice recorded falls back to the home directory, and starting a
+ * coding agent there hands it the whole of someone's home as its working set
+ * — every document, every other project, every set of keys lying around.
+ * macOS notices before the person does and opens the permission prompts for
+ * Desktop, Documents and Downloads one after another, which is how this was
+ * found. A guess is fine for showing a path; it is not fine for a cwd.
+ */
+function projectPicked(): boolean {
+  return storedProject() !== null || Boolean(process.env.BULLETZ_PROJECT) || !app.isPackaged;
+}
+
+/**
  * Adopt the PATH a terminal would have.
  *
  * An app launched from Finder or the Dock inherits launchd's environment, not
@@ -513,6 +528,22 @@ app.whenReady().then(() => {
       _e,
       { id, cols, rows, kind }: { id: string; cols: number; rows: number; kind?: "shell" | "agent" },
     ) => {
+    // Nothing is started in a folder nobody chose. The pane says so and offers
+    // the picker, which is a far better first run than silently taking $HOME.
+    if (!projectPicked()) {
+      return {
+        cwd: "",
+        shell: "",
+        replay: "",
+        reattached: false,
+        needsProject: true,
+        error:
+          "Choose the folder Bulletz should work in. Until then there is no " +
+          "safe place to start — your home directory would put every file you " +
+          "own in the agent's reach.",
+      };
+    }
+
     // Reattach rather than respawn. Killing the old pty here is what made every
     // reload a fresh shell with the previous job dead.
     const want = kind ?? "shell";
@@ -725,6 +756,22 @@ app.whenReady().then(() => {
       return args.some((a) => existsSync(isAbsolute(a as string) ? (a as string) : join(dir, a as string)));
     };
 
+    // Same reasoning as the terminal: a config file written into whatever
+    // folder we happened to guess is litter in someone's home directory.
+    if (action === "connect" && !projectPicked()) {
+      return {
+        dir,
+        file,
+        exists: false,
+        connected: false,
+        needsProject: true,
+        server,
+        command: process.execPath,
+        bundle: MCP_BUNDLE,
+        bundleExists: existsSync(MCP_BUNDLE),
+      };
+    }
+
     if (action === "connect") {
       const existing = read() ?? {};
       const servers = existing.mcpServers ?? {};
@@ -749,6 +796,7 @@ app.whenReady().then(() => {
       dir,
       file,
       exists: existsSync(file),
+      needsProject: !projectPicked(),
       connected: points(cfg?.mcpServers?.["bulletz"]),
       server,
       command: process.execPath,

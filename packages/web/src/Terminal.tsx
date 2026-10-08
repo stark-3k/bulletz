@@ -23,6 +23,9 @@ type Bridge = {
       stale?: boolean;
       /** Set when an agent pane could not start — no agent command found. */
       error?: string;
+      /** True when nothing started because no project folder has been chosen.
+       *  A different fix from a missing agent, so a different button. */
+      needsProject?: boolean;
     }>;
     write: (id: string, data: string) => void;
     resize: (id: string, cols: number, rows: number) => void;
@@ -57,6 +60,7 @@ type Bridge = {
       file: string;
       exists: boolean;
       connected: boolean;
+      needsProject?: boolean;
       server: string;
       command: string;
       bundle: string;
@@ -167,6 +171,7 @@ export function TerminalPane({
   const [exited, setExited] = useState<number | null>(null);
   const [reattached, setReattached] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [needsProject, setNeedsProject] = useState(false);
   const [stale, setStale] = useState(false);
   // Bumping this tears the view down and builds a fresh one, which is what a
   // restart is: the old pty is already gone, so spawn makes a new shell.
@@ -208,12 +213,14 @@ export function TerminalPane({
     void api.term.spawn(id, term.cols, term.rows, kind).then((info) => {
       if (disposed) return;
       if (info.error) {
-        // No agent command found. Say so in the pane rather than failing with
-        // a bare ENOENT that points at nothing.
+        // No agent command found, or no folder chosen. Say so in the pane
+        // rather than failing with a bare ENOENT that points at nothing.
         setStartError(info.error);
+        setNeedsProject(Boolean(info.needsProject));
         term.write(`\r\n\x1b[33m${info.error}\x1b[0m\r\n`);
         return;
       }
+      setNeedsProject(false);
       setCwd(info.cwd);
       // Hand back the output this view missed, so a reload resumes the session
       // instead of staring at a blank screen with a live job behind it.
@@ -272,7 +279,13 @@ export function TerminalPane({
     <div className="term-wrap">
       <div className="term-bar">
         <span className={`term-dot${startError ? " off" : ""}`} />
-        <span className="term-cwd">{startError ? "no agent configured" : cwd || "starting…"}</span>
+        <span className="term-cwd">
+          {needsProject
+            ? "no project folder"
+            : startError
+              ? "no agent configured"
+              : cwd || "starting…"}
+        </span>
         {reattached && exited === null && <span className="term-reattached">reattached</span>}
         {stale && exited === null && (
           // A running process cannot be handed a new environment, so the only
@@ -293,7 +306,26 @@ export function TerminalPane({
             </button>
           </>
         )}
-        {startError && (
+        {startError && needsProject && (
+          // One click fixes this one, so offer the click rather than a
+          // sentence about where the setting lives.
+          <>
+            <span className="term-exit">no folder chosen</span>
+            <button
+              className="term-restart"
+              onClick={() => {
+                void bridge()
+                  ?.project?.choose?.()
+                  .then((r) => {
+                    if (r?.changed) setGeneration((g) => g + 1);
+                  });
+              }}
+            >
+              Choose a folder…
+            </button>
+          </>
+        )}
+        {startError && !needsProject && (
           // Restarting cannot help until a command exists, so point at the
           // thing that can.
           <span className="term-exit">Settings → Agent</span>

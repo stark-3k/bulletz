@@ -41,7 +41,7 @@
   "build": {
     "appId": "ai.bulletz.desktop",
     "productName": "Bulletz",
-    "copyright": "© 2026 Bulletz",
+    "copyright": "\u00a9 2026 Bulletz",
     "directories": {
       "output": "release",
       "buildResources": "assets"
@@ -80,7 +80,9 @@
       "entitlementsInherit": "assets/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Bulletz uses the microphone for voice channels.",
-        "NSCameraUsageDescription": "Bulletz uses the camera for voice channels."
+        "NSCameraUsageDescription": "Bulletz uses the camera for voice channels.",
+        "NSBluetoothAlwaysUsageDescription": null,
+        "NSBluetoothPeripheralUsageDescription": null
       }
     },
     "dmg": {

@@ -437,11 +437,11 @@ server.tool(
 
 server.tool(
   "publish_widget",
-  "Publish a live UI into the workspace chat. Two kinds:\n• 'view' (preferred) — pick a built-in view type and map your tool's fields to it. Typed, themed, accessible, and it refreshes without costing a model call.\n• 'html' — your own HTML/CSS/JS for what the view types cannot express. It runs in a null-origin sandbox with no credentials and no access to the host page.\nWidgets are created as DRAFTS; a human activates them.",
+  "Publish a live UI into the workspace chat. Three kinds:\n• 'view' (preferred) — pick a built-in view type and map your tool's fields to it. Typed, themed, accessible, and it refreshes without costing a model call.\n• 'html' — your own HTML/CSS/JS for what the view types cannot express. It runs in a null-origin sandbox with no credentials and no access to the host page. Do NOT put an <iframe> to a website in here: the null origin is inherited, the site loads without storage, and most pages render blank. Use 'embed' for that.\n• 'embed' — frame a website at `url`. The site loads at its own origin, so it works normally; it is cross-origin from the workspace and cannot read it.\nWidgets are created as DRAFTS; a human activates them.",
   {
     name: z.string().min(2).max(64),
     description: z.string().max(500).optional(),
-    kind: z.enum(["view", "html"]),
+    kind: z.enum(["view", "html", "embed"]),
     tool: z.string().optional().describe("Name or id of the tool supplying rows (required for 'view')"),
     tool_args: z.record(z.unknown()).default({}),
     view: z
@@ -458,6 +458,12 @@ server.tool(
       })
       .optional(),
     html: z.string().max(400000).optional().describe("kind='html': a full fragment. No network access."),
+    url: z
+      .string()
+      .url()
+      .max(2000)
+      .optional()
+      .describe("kind='embed': the http/https page to frame"),
     channel_id: z.string().uuid().optional().describe("Post it into this channel"),
   },
   async (args) => {

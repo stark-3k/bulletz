@@ -17,11 +17,13 @@ export type WidgetRow = {
   id: string;
   name: string;
   description: string | null;
-  kind: "view" | "html";
+  kind: "view" | "html" | "embed";
   tool_id: string | null;
   tool_name: string | null;
   tool_status: string | null;
   view: ViewSpec | null;
+  /** kind='embed': the site to frame. */
+  url: string | null;
   status: "draft" | "active" | "disabled";
   pinned: boolean;
   created_by_handle: string | null;
@@ -99,6 +101,8 @@ export function Widget({ widget, api }: { widget: WidgetRow; api: Api }) {
         </div>
       ) : err ? (
         <div className="widget-err">{err}</div>
+      ) : widget.kind === "embed" ? (
+        <EmbedWidget url={widget.url} />
       ) : widget.kind === "html" ? (
         <HtmlWidget id={widget.id} api={api} />
       ) : rows === null ? (
@@ -197,6 +201,84 @@ function View({ spec, rows }: { spec: ViewSpec; rows: Row[] }) {
  *  frame a null origin — no cookies, no storage, no reach into the host page.
  *  Its only channel is postMessage, and data arrives from us, so the widget
  *  holds exactly its tool's permissions and nothing more. */
+/**
+ * Tier 3: a framed website.
+ *
+ * This exists because it cannot be done with an html widget. That kind renders
+ * inside a srcdoc frame sandboxed without allow-same-origin — on purpose, so a
+ * widget has no reach into the host page — and sandbox flags only ever narrow
+ * going down the frame tree. A site's own <iframe> nested in there inherits the
+ * null origin however it is written, loads with no cookies and no storage, and
+ * any page that reads localStorage while booting throws before it paints. The
+ * symptom is a white rectangle and nothing in the UI to explain it.
+ *
+ * At the top level the frame is the site's own origin instead, so the page
+ * behaves exactly as it does in a tab — and it is still cross-origin from the
+ * workspace, which is what keeps it out of this page.
+ */
+function EmbedWidget({ url }: { url: string | null }) {
+  const [loaded, setLoaded] = useState(false);
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setSlow(false);
+    // A cross-origin frame reports load and nothing else — not a 404, not a
+    // refusal to be framed. Silence past this point is the only failure we can
+    // honestly detect, so it is the only one claimed.
+    const t = setTimeout(() => setSlow(true), 12000);
+    return () => clearTimeout(t);
+  }, [url]);
+
+  if (!url) return <div className="widget-err">This embed has no URL.</div>;
+
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return <div className="widget-err">Not a usable address: {url}</div>;
+  }
+  if (!/^https?:$/.test(target.protocol)) {
+    return <div className="widget-err">Only http and https can be framed.</div>;
+  }
+
+  // allow-same-origin means "the framed site's own origin" only while that
+  // origin differs from this page's. Were they the same, the token would hand
+  // the frame the workspace itself, so it is withheld — the site may not work
+  // without storage, and that is the right way round.
+  const crossOrigin = target.origin !== window.location.origin;
+  const sandbox = [
+    "allow-scripts",
+    "allow-forms",
+    "allow-popups",
+    "allow-popups-to-escape-sandbox",
+    ...(crossOrigin ? ["allow-same-origin"] : []),
+  ].join(" ");
+
+  return (
+    <div className="w-embed">
+      <iframe
+        className="w-embed-frame"
+        src={url}
+        title={target.host}
+        sandbox={sandbox}
+        referrerPolicy="no-referrer"
+        onLoad={() => setLoaded(true)}
+      />
+      {!loaded && (
+        <div className="w-embed-note">
+          {slow ? `${target.host} has not responded.` : `Loading ${target.host}…`}
+        </div>
+      )}
+      {!crossOrigin && (
+        <div className="w-embed-note bottom">
+          Same origin as the workspace, so this frame runs without storage.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HtmlWidget({ id, api }: { id: string; api: Api }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [html, setHtml] = useState<string | null>(null);
