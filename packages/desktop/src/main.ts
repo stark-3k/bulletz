@@ -695,6 +695,7 @@ app.whenReady().then(() => {
       exists: existsSync(file),
       connected: Boolean(cfg?.mcpServers?.["bulletz"]),
       server,
+      command: process.execPath,
       bundle: MCP_BUNDLE,
       bundleExists: existsSync(MCP_BUNDLE),
     };

@@ -55,6 +55,7 @@ type Bridge = {
       exists: boolean;
       connected: boolean;
       server: string;
+      command: string;
       bundle: string;
       bundleExists: boolean;
     }>;

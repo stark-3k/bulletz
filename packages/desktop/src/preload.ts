@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld("bulletz", {
         exists: boolean;
         connected: boolean;
         server: string;
+        command: string;
         bundle: string;
         bundleExists: boolean;
       }>,

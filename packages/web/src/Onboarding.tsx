@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Api } from "./api.ts";
 import { bridge } from "./Terminal.tsx";
 
@@ -52,21 +52,49 @@ export function Onboarding({
   const done = Object.values(state.steps).filter((s) => s.done).length;
   const total = Object.keys(state.steps).length;
 
-  const mcpConfig = agentToken
-    ? JSON.stringify(
-        {
-          mcpServers: {
-            bulletz: {
-              command: "node",
-              args: ["packages/mcp/dist/index.js"],
-              env: { BULLETZ_SERVER_URL: api.baseUrl, BULLETZ_TOKEN: agentToken },
+  /**
+   * Where the bridge actually lives on this machine.
+   *
+   * This used to print `node packages/mcp/dist/index.js` — a path relative to
+   * the Bulletz repository, which resolves for exactly one person. The
+   * desktop app knows the real location, so ask it. In a browser there is no
+   * local app to ask and no honest answer, so say that rather than print a
+   * path that cannot work.
+   */
+  const [mcp, setMcp] = useState<{
+    file: string;
+    command: string;
+    bundle: string;
+    connected: boolean;
+  } | null>(null);
+  const [wrote, setWrote] = useState(false);
+
+  useEffect(() => {
+    void bridge()
+      ?.agent?.mcp?.()
+      .then((r) => r && setMcp(r));
+  }, []);
+
+  const mcpConfig =
+    agentToken && mcp
+      ? JSON.stringify(
+          {
+            mcpServers: {
+              bulletz: {
+                command: mcp.command,
+                args: [mcp.bundle],
+                env: {
+                  ELECTRON_RUN_AS_NODE: "1",
+                  BULLETZ_SERVER_URL: api.baseUrl,
+                  BULLETZ_TOKEN: agentToken,
+                },
+              },
             },
           },
-        },
-        null,
-        2,
-      )
-    : null;
+          null,
+          2,
+        )
+      : null;
 
   return (
     <div className="onboard">
@@ -164,18 +192,48 @@ export function Onboarding({
           >
             {state.agent ? `Create a token for ${state.agent.handle}` : "No agent identity"}
           </button>
+        ) : !mcp ? (
+          <div className="onboard-config">
+            <div className="onboard-note">
+              Your token is made. The desktop app writes the agent&apos;s config for you — it is
+              the only thing that knows where the bridge lives on your machine. Open Bulletz there
+              and use <strong>Settings → Agent → Connect this project</strong>.
+            </div>
+          </div>
         ) : (
           <div className="onboard-config">
             <div className="onboard-note">
-              Save as <code>.mcp.json</code> in your project. Shown once — it is stored hashed.
+              {wrote || mcp.connected ? (
+                <>
+                  Written to <code>{mcp.file}</code>. Your agent can read this workspace.
+                </>
+              ) : (
+                <>
+                  This goes in <code>{mcp.file}</code>. The token is shown once — it is stored
+                  hashed.
+                </>
+              )}
             </div>
             <pre>{mcpConfig}</pre>
-            <button
-              className="voice-ctl"
-              onClick={() => void navigator.clipboard?.writeText(mcpConfig ?? "")}
-            >
-              Copy config
-            </button>
+            <div className="row">
+              <button
+                className="send"
+                disabled={wrote || mcp.connected}
+                onClick={() =>
+                  void bridge()
+                    ?.agent?.mcp?.("connect")
+                    .then(() => setWrote(true))
+                }
+              >
+                {wrote || mcp.connected ? "Connected" : "Write it for me"}
+              </button>
+              <button
+                className="voice-ctl"
+                onClick={() => void navigator.clipboard?.writeText(mcpConfig ?? "")}
+              >
+                Copy config
+              </button>
+            </div>
           </div>
         )}
       </Step>
