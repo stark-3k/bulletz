@@ -1558,3 +1558,5 @@ button { font: inherit; cursor: pointer; }
 }
 .ws-leave:hover { color: var(--danger); background: var(--bg-raised); }
 .auth-cancel { display: block; margin: 10px auto 0; }
+/* A link styled as the primary button needs the button's own box back. */
+a.send { text-decoration: none; display: inline-flex; align-items: center; }

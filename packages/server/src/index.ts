@@ -28,9 +28,16 @@ const app = Fastify({ logger: { level: env.logLevel } });
 // `Origin: null`, or no Origin at all. Those are allowed unconditionally —
 // blocking them would break the app without protecting anything, since CORS
 // only ever constrains browsers.
+const LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+
 await app.register(cors, {
   origin(origin, cb) {
     if (!origin || origin === "null") return cb(null, true);
+    // A page can only carry a loopback origin if it is being served from this
+    // machine, so there is no stranger to protect against — and in
+    // development the UI is on :5174 while the API is on :4000, which is
+    // cross-origin every single time.
+    if (LOOPBACK.test(origin)) return cb(null, true);
     if (env.corsOrigins.length === 0) return cb(null, false);
     cb(null, env.corsOrigins.includes(origin));
   },

@@ -9,9 +9,19 @@
  */
 import type { LocalNotification } from "./Notifications.tsx";
 
-const RELEASES = "https://api.github.com/repos/stark-3k/bulletz/releases/latest";
+/**
+ * The releases list, not /releases/latest.
+ *
+ * GitHub's "latest" endpoint deliberately skips prereleases — while every
+ * build is a beta it returns 404, and the check silently never fires. Asking
+ * for the list and choosing here also lets the rule be the sensible one:
+ * someone on a prerelease hears about prereleases, someone on a stable
+ * release is not nagged toward a beta.
+ */
+const RELEASES = "https://api.github.com/repos/stark-3k/bulletz/releases?per_page=20";
 const DISMISSED = "bulletz.update.dismissed";
 const LAST_CHECK = "bulletz.update.checked";
+const FOUND = "bulletz.update.found";
 const EVERY_MS = 6 * 60 * 60 * 1000; // four times a day is plenty for a desktop app
 
 export type Release = { version: string; url: string; notes: string | null };
@@ -54,15 +64,31 @@ export function isNewer(candidate: string, current: string): boolean {
   return false;
 }
 
-async function fetchLatest(signal: AbortSignal): Promise<Release | null> {
-  const res = await fetch(RELEASES, {
-    signal,
-    headers: { accept: "application/vnd.github+json" },
-  });
+const isPrerelease = (v: string) => /-/.test(v.trim().replace(/^v/, ""));
+
+async function fetchLatest(current: string, signal: AbortSignal): Promise<Release | null> {
+  const res = await fetch(RELEASES, { signal, headers: { accept: "application/vnd.github+json" } });
   if (!res.ok) return null;
-  const body = (await res.json()) as { tag_name?: string; html_url?: string; body?: string };
-  if (!body.tag_name || !body.html_url) return null;
-  return { version: body.tag_name, url: body.html_url, notes: body.body ?? null };
+  const list = (await res.json()) as {
+    tag_name?: string;
+    html_url?: string;
+    body?: string;
+    draft?: boolean;
+    prerelease?: boolean;
+  }[];
+  if (!Array.isArray(list)) return null;
+
+  const wantPre = isPrerelease(current);
+  let best: Release | null = null;
+  for (const r of list) {
+    if (r.draft || !r.tag_name || !r.html_url) continue;
+    // Running a stable build should not be nudged onto a beta.
+    if (r.prerelease && !wantPre) continue;
+    if (!isNewer(r.tag_name, current)) continue;
+    if (best && !isNewer(r.tag_name, best.version)) continue;
+    best = { version: r.tag_name, url: r.html_url, notes: r.body ?? null };
+  }
+  return best;
 }
 
 /**
@@ -70,13 +96,16 @@ async function fetchLatest(signal: AbortSignal): Promise<Release | null> {
  * dismissed. Throttled, because the releases API is rate limited for
  * unauthenticated callers and nobody needs this answered on every mount.
  */
-export async function checkForUpdate(currentVersion: string): Promise<LocalNotification | null> {
+export async function checkForUpdate(
+  currentVersion: string,
+  force = false,
+): Promise<LocalNotification | null> {
   if (!currentVersion) return null;
   try {
     const last = Number(localStorage.getItem(LAST_CHECK) ?? 0);
-    if (Date.now() - last < EVERY_MS) {
+    if (!force && Date.now() - last < EVERY_MS) {
       // Still surface a previously-found update that was never dismissed.
-      const cached = localStorage.getItem("bulletz.update.found");
+      const cached = localStorage.getItem(FOUND);
       if (!cached) return null;
       const rel = JSON.parse(cached) as Release;
       return isNewer(rel.version, currentVersion) && localStorage.getItem(DISMISSED) !== rel.version
@@ -84,11 +113,13 @@ export async function checkForUpdate(currentVersion: string): Promise<LocalNotif
         : null;
     }
 
-    const rel = await fetchLatest(AbortSignal.timeout(8000));
+    const rel = await fetchLatest(currentVersion, AbortSignal.timeout(8000));
     localStorage.setItem(LAST_CHECK, String(Date.now()));
-    if (!rel) return null;
-    localStorage.setItem("bulletz.update.found", JSON.stringify(rel));
-    if (!isNewer(rel.version, currentVersion)) return null;
+    if (!rel) {
+      localStorage.removeItem(FOUND);
+      return null;
+    }
+    localStorage.setItem(FOUND, JSON.stringify(rel));
     if (localStorage.getItem(DISMISSED) === rel.version) return null;
     return toNotification(rel);
   } catch {
@@ -120,5 +151,37 @@ export function dismissUpdate(id: string) {
     localStorage.setItem(DISMISSED, version);
   } catch {
     /* dismissal is a convenience, not state worth failing over */
+  }
+}
+
+
+/**
+ * The same question, asked for a settings panel rather than the bell: what is
+ * running, is there something newer, and did the check even work. A silent
+ * null is right for a notification and useless in a panel someone opened
+ * specifically to find out.
+ */
+export type UpdateStatus =
+  | { state: "current"; version: string }
+  | { state: "available"; version: string; latest: Release }
+  | { state: "unknown"; version: string; reason: string };
+
+export async function updateStatus(currentVersion: string): Promise<UpdateStatus> {
+  if (!currentVersion) return { state: "unknown", version: "", reason: "Unknown version." };
+  try {
+    const rel = await fetchLatest(currentVersion, AbortSignal.timeout(8000));
+    localStorage.setItem(LAST_CHECK, String(Date.now()));
+    if (rel) {
+      localStorage.setItem(FOUND, JSON.stringify(rel));
+      return { state: "available", version: currentVersion, latest: rel };
+    }
+    localStorage.removeItem(FOUND);
+    return { state: "current", version: currentVersion };
+  } catch {
+    return {
+      state: "unknown",
+      version: currentVersion,
+      reason: "Could not reach GitHub to check.",
+    };
   }
 }

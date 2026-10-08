@@ -18,9 +18,11 @@ export const env = {
    * Browser origins allowed to call this API, comma separated.
    *
    * Empty means same-origin only, which is correct when the server serves the
-   * UI itself. The desktop app is not a browser origin — it loads over file://
-   * and sends `Origin: null` or none at all — so it is allowed regardless;
-   * CORS is not what protects this API, the bearer token is.
+   * UI itself. Three things are allowed regardless of this list: the desktop
+   * app (not a browser origin — it loads over file:// and sends `Origin:
+   * null` or none at all), requests with no Origin, and loopback origins,
+   * which can only come from a page served by this same machine. CORS is not
+   * what protects this API; the bearer token is.
    */
   corsOrigins: (process.env.CORS_ORIGINS ?? "")
     .split(",")

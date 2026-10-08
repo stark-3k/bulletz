@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Api, Member, SessionRow, TokenRow } from "./api.ts";
 import { resolveServer } from "./server.ts";
 import { bridge } from "./Terminal.tsx";
+import { updateStatus, type UpdateStatus } from "./updates.ts";
 
 type Tab = "account" | "notifications" | "security" | "tokens";
 
@@ -166,6 +167,7 @@ function Account({ api, me, run }: { api: Api; me: { handle: string; role: strin
       </p>
 
       <ProjectFolder />
+      <AppVersion />
     </>
   );
 }
@@ -521,6 +523,72 @@ function Notifications({ api, run }: { api: Api; run: Run }) {
           );
         })}
         {channels.length === 0 && <p className="muted empty">No channels yet.</p>}
+      </div>
+    </>
+  );
+}
+
+
+/**
+ * What is running, and whether anything newer exists.
+ *
+ * Desktop only: the web UI is whatever the server is serving, so there is no
+ * such thing as an out-of-date copy of it. Nothing here installs anything —
+ * macOS refuses to auto-update an app without a Developer ID signature, and
+ * these builds are ad-hoc signed, so an updater would work on Linux and
+ * Windows and quietly fail on the platform most people use.
+ */
+function AppVersion() {
+  const [version, setVersion] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const check = useCallback(async (v: string) => {
+    setChecking(true);
+    setStatus(await updateStatus(v));
+    setChecking(false);
+  }, []);
+
+  useEffect(() => {
+    const b = bridge();
+    if (!b?.appVersion) return;
+    void b.appVersion().then((v) => {
+      setVersion(v);
+      void check(v);
+    });
+  }, [check]);
+
+  if (!version) return null;
+
+  return (
+    <>
+      <h4 className="spaced">Version</h4>
+      <div className="row">
+        <code className="server-inline">{version}</code>
+        {status?.state === "available" && <span className="pill">update available</span>}
+      </div>
+
+      {checking && <p className="muted">Checking…</p>}
+      {!checking && status?.state === "current" && (
+        <p className="muted">You are on the newest build.</p>
+      )}
+      {!checking && status?.state === "unknown" && <p className="muted">{status.reason}</p>}
+      {!checking && status?.state === "available" && (
+        <p className="muted">
+          <strong>{status.latest.version}</strong> has been released. Builds are unsigned, so this
+          is a download rather than an automatic update.
+        </p>
+      )}
+
+      <div className="row">
+        <button className="ghost" disabled={checking} onClick={() => void check(version)}>
+          {checking ? "Checking…" : "Check again"}
+        </button>
+        {status?.state === "available" && (
+          <a className="send" href={status.latest.url} target="_blank" rel="noreferrer">
+            Get {status.latest.version}
+          </a>
+        )}
       </div>
     </>
   );
