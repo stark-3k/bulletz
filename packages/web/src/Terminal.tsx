@@ -49,6 +49,15 @@ type Bridge = {
     }>;
     setToken?: (token: string | null) => Promise<boolean>;
     hasToken?: () => Promise<boolean>;
+    mcp?: (action?: "connect") => Promise<{
+      dir: string;
+      file: string;
+      exists: boolean;
+      connected: boolean;
+      server: string;
+      bundle: string;
+      bundleExists: boolean;
+    }>;
     run: (
       channelId: string,
       prompt: string,

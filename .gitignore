@@ -10,3 +10,6 @@ packages/web/.env.local
 
 # electron-builder output
 packages/desktop/release/
+
+# Generated at build time from packages/mcp
+packages/desktop/assets/mcp.mjs

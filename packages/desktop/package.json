@@ -7,22 +7,23 @@
     "build": "tsc -p tsconfig.json",
     "brand": "node scripts/brand-dev-shell.mjs",
     "unbrand": "node scripts/brand-dev-shell.mjs --restore",
-    "prestart": "npm run brand",
+    "prestart": "npm run brand && npm run bundle:mcp",
     "start": "npm run build && electron .",
-    "predev": "npm run brand",
+    "predev": "npm run brand && npm run bundle:mcp",
     "dev": "npm run build && BULLETZ_DEV_URL=http://localhost:5174 electron .",
-    "prepackage": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "prepackage": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs && npm run bundle:mcp",
     "package": "electron-builder --mac --publish never",
     "package:dir": "electron-builder --mac --dir --publish never",
     "rebuild": "electron-builder install-app-deps",
-    "prepackage:dir": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "prepackage:dir": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs && npm run bundle:mcp",
     "package:mac": "electron-builder --mac --publish never",
     "package:win": "electron-builder --win --publish never",
-    "prepackage:mac": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
-    "prepackage:win": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
+    "prepackage:mac": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs && npm run bundle:mcp",
+    "prepackage:win": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs && npm run bundle:mcp",
     "package:linux": "electron-builder --linux --publish never",
-    "prepackage:linux": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs",
-    "rebuild:pty": "electron-rebuild -v 33.4.11 -f -w node-pty"
+    "prepackage:linux": "npm run build && npm run build -w @bulletz/web -- --mode package && node scripts/check-no-secrets.mjs && npm run bundle:mcp",
+    "rebuild:pty": "electron-rebuild -v 33.4.11 -f -w node-pty",
+    "bundle:mcp": "node scripts/bundle-mcp.mjs"
   },
   "dependencies": {
     "node-pty": "^1.0.0"
@@ -32,6 +33,7 @@
     "@types/node": "^22.10.2",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2"
   },
   "description": "The context layer for local coding agents.",
@@ -39,7 +41,7 @@
   "build": {
     "appId": "ai.bulletz.desktop",
     "productName": "Bulletz",
-    "copyright": "\u00a9 2026 Bulletz",
+    "copyright": "© 2026 Bulletz",
     "directories": {
       "output": "release",
       "buildResources": "assets"
@@ -48,6 +50,7 @@
       "dist/**/*",
       "assets/icon.icns",
       "assets/icon.png",
+      "assets/mcp.mjs",
       "package.json"
     ],
     "asarUnpack": [

@@ -692,6 +692,8 @@ function AgentSettings({ run }: { run: Run }) {
         )}
       </div>
 
+      <McpStatus />
+
       <h4 className="spaced">Found on this machine</h4>
       <div className="rows">
         {info.presets.map((p) => (
@@ -713,6 +715,83 @@ function AgentSettings({ run }: { run: Run }) {
       <p className="muted" style={{ marginTop: 10 }}>
         This list is a convenience, not a limit — type any command above.
       </p>
+    </>
+  );
+}
+
+
+/**
+ * Can the agent actually see this workspace?
+ *
+ * The agent finds its MCP servers through a config file in the folder it runs
+ * in. Without one it starts perfectly, answers from nothing, and never
+ * explains why — which is the worst possible failure for something whose only
+ * job is to know things.
+ */
+function McpStatus() {
+  const [state, setState] = useState<{
+    dir: string;
+    file: string;
+    exists: boolean;
+    connected: boolean;
+    server: string;
+    bundleExists: boolean;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const r = await bridge()?.agent?.mcp?.();
+    if (r) setState(r);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (!state) return null;
+
+  return (
+    <>
+      <h4 className="spaced">Workspace access</h4>
+      {state.connected ? (
+        <p className="muted">
+          This project is connected. The agent can read the team&apos;s decisions, constraints and
+          history through <code>context_pack</code>, and post answers back.
+        </p>
+      ) : (
+        <p className="muted warn">
+          The agent cannot see this workspace. It will start and answer from nothing, because
+          nothing in <code>{state.dir}</code> tells it where the workspace is.
+        </p>
+      )}
+      <div className="row">
+        <code className="server-inline">{state.file}</code>
+      </div>
+      <p className="muted">
+        Points at <code>{state.server || "the signed-in server"}</code>. The credential is
+        referenced, not written — a project folder is usually a git repository, and a token on
+        disk there is one commit from being published.
+      </p>
+      {!state.connected && (
+        <div className="row">
+          <button
+            className="send"
+            disabled={busy || !state.bundleExists}
+            onClick={() => {
+              setBusy(true);
+              void bridge()
+                ?.agent?.mcp?.("connect")
+                .then((r) => r && setState(r))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? "…" : "Connect this project"}
+          </button>
+          {!state.bundleExists && (
+            <span className="muted">The bridge is missing from this build.</span>
+          )}
+        </div>
+      )}
     </>
   );
 }

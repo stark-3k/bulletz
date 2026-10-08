@@ -59,6 +59,16 @@ contextBridge.exposeInMainWorld("bulletz", {
     setToken: (token: string | null) =>
       ipcRenderer.invoke("agent:token", token) as Promise<boolean>,
     hasToken: () => ipcRenderer.invoke("agent:token") as Promise<boolean>,
+    mcp: (action?: "connect") =>
+      ipcRenderer.invoke("agent:mcp", action) as Promise<{
+        dir: string;
+        file: string;
+        exists: boolean;
+        connected: boolean;
+        server: string;
+        bundle: string;
+        bundleExists: boolean;
+      }>,
   },
   screen: {
     sources: () =>

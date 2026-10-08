@@ -102,6 +102,8 @@ const APP_VERSION = (() => {
   }
 })();
 const ICON_PNG = join(ASSETS, "icon.png");
+/** The MCP bridge, bundled to one file so an installed app carries it. */
+const MCP_BUNDLE = join(ASSETS, "mcp.mjs");
 /** Unused at runtime — nativeImage cannot read .icns. It exists for the
  *  packaging step, which embeds it in the macOS bundle's Info.plist. */
 export const ICON_ICNS = join(ASSETS, "icon.icns");
@@ -643,6 +645,61 @@ app.whenReady().then(() => {
   });
 
   /** Which agent the Agent pane runs, and what is available to choose. */
+  /**
+   * Whether the agent can actually reach this workspace, and the means to fix
+   * it when it cannot.
+   *
+   * An agent CLI finds its MCP servers through a config file in the folder it
+   * is run from. If the project folder has none — which is every folder
+   * except this repository — the agent starts fine, answers from nothing, and
+   * never says why. So the answer is reported, and writing it is one button.
+   */
+  ipcMain.handle("agent:mcp", (_e, action: unknown) => {
+    const dir = projectRoot();
+    const file = join(dir, ".mcp.json");
+    const server = storedServer() ?? projectEnv()["BULLETZ_SERVER_URL"] ?? "";
+
+    const read = () => {
+      try {
+        return JSON.parse(readFileSync(file, "utf8")) as {
+          mcpServers?: Record<string, { env?: Record<string, string> }>;
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    if (action === "connect") {
+      const existing = read() ?? {};
+      const servers = existing.mcpServers ?? {};
+      // Run through Electron's own node, so the user does not need node
+      // installed for the bridge to work. The token is referenced rather than
+      // written: a project folder is often a git repository, and a credential
+      // on disk there is one `git add .` from being published.
+      servers["bulletz"] = {
+        command: process.execPath,
+        args: [MCP_BUNDLE],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          BULLETZ_SERVER_URL: server || "${BULLETZ_SERVER_URL}",
+          BULLETZ_TOKEN: "${BULLETZ_TOKEN}",
+        },
+      } as never;
+      writeFileSync(file, JSON.stringify({ ...existing, mcpServers: servers }, null, 2) + "\n");
+    }
+
+    const cfg = read();
+    return {
+      dir,
+      file,
+      exists: existsSync(file),
+      connected: Boolean(cfg?.mcpServers?.["bulletz"]),
+      server,
+      bundle: MCP_BUNDLE,
+      bundleExists: existsSync(MCP_BUNDLE),
+    };
+  });
+
   ipcMain.handle("agent:command", (_e, patch: unknown) => {
     if (patch !== undefined) {
       const p = patch as Partial<AgentCommand> | null;
