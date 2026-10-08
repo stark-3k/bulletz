@@ -38,7 +38,7 @@ create table if not exists notifications (
   -- system message about the app itself.
   channel_id    uuid references channels(id) on delete cascade,
   event_id      uuid references events(id) on delete cascade,
-  -- Who caused it, so the UI can say "rishabh mentioned you" without a join
+  -- Who caused it, so the UI can say "ada mentioned you" without a join
   -- through the event that may since have been tombstoned.
   from_actor_id uuid references actors(id) on delete set null,
   from_handle   text,

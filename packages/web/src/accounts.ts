@@ -7,7 +7,7 @@
  * workspaces": there is no central directory, each server is somebody else's
  * machine, and the identity you have on one has nothing to do with the other.
  * Handles are unique per workspace, not globally; the same person is
- * `rishabh` here and could be `rk` there.
+ * `ada` on one server and `ada.l` on another.
  */
 
 const KEY = "bulletz.accounts";

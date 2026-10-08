@@ -258,7 +258,7 @@ function Setup({ onDone }: { onDone: (token: string) => void }) {
         <label htmlFor="ws">Workspace name</label>
         <input id="ws" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Acme engineering" autoFocus />
         <label htmlFor="h">Your handle</label>
-        <input id="h" value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="rishabh" />
+        <input id="h" value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="your-handle" />
         <label htmlFor="p">Password</label>
         <input id="p" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="at least 10 characters" />
         <button className="send" type="submit" disabled={busy || password.length < 10 || !workspace.trim() || !handle.trim()}>
@@ -390,7 +390,7 @@ function Auth({
               id="handle"
               value={handle}
               onChange={(e) => setHandle(e.target.value)}
-              placeholder="rishabh"
+              placeholder="your-handle"
               autoFocus={mode === "login"}
             />
             {mode === "invite" && (

@@ -6,7 +6,7 @@ import { maybeOne, one, pool, q } from "./db.js";
  *  Prints the tokens; they are not recoverable afterwards (only hashes stored). */
 async function main() {
   const slug = process.env.SEED_WORKSPACE ?? "bulletz";
-  const humanHandle = process.env.SEED_HANDLE ?? "rishabh";
+  const humanHandle = process.env.SEED_HANDLE ?? "dev";
 
   const existing = await maybeOne<{ id: string }>(`select id from workspaces where slug = $1`, [slug]);
   const ws = existing
