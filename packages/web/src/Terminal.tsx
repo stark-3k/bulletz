@@ -18,6 +18,9 @@ type Bridge = {
       shell: string;
       replay: string;
       reattached: boolean;
+      /** True when this process was started against a different workspace or
+       *  before a credential existed, so it will answer 401 until restarted. */
+      stale?: boolean;
       /** Set when an agent pane could not start — no agent command found. */
       error?: string;
     }>;
@@ -164,6 +167,7 @@ export function TerminalPane({
   const [exited, setExited] = useState<number | null>(null);
   const [reattached, setReattached] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   // Bumping this tears the view down and builds a fresh one, which is what a
   // restart is: the old pty is already gone, so spawn makes a new shell.
   const [generation, setGeneration] = useState(0);
@@ -215,6 +219,7 @@ export function TerminalPane({
       // instead of staring at a blank screen with a live job behind it.
       if (info.replay) term.write(info.replay);
       setReattached(info.reattached);
+      setStale(Boolean(info.stale));
       // Expose a writer so a highlighted message can be sent straight in.
       onReady?.((data: string) => api.term.write(id, data));
     });
@@ -269,6 +274,25 @@ export function TerminalPane({
         <span className={`term-dot${startError ? " off" : ""}`} />
         <span className="term-cwd">{startError ? "no agent configured" : cwd || "starting…"}</span>
         {reattached && exited === null && <span className="term-reattached">reattached</span>}
+        {stale && exited === null && (
+          // A running process cannot be handed a new environment, so the only
+          // honest options are to say so and offer the restart.
+          <>
+            <span className="term-exit">started before the current workspace</span>
+            <button
+              className="term-restart"
+              onClick={() => {
+                // Remounting alone would reattach to the same stale process,
+                // so it has to actually end first.
+                api?.term.kill(id);
+                setStale(false);
+                setGeneration((g) => g + 1);
+              }}
+            >
+              Restart
+            </button>
+          </>
+        )}
         {startError && (
           // Restarting cannot help until a command exists, so point at the
           // thing that can.

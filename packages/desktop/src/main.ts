@@ -131,6 +131,13 @@ function projectEnv(): Record<string, string> {
       if (m?.[1] && m[2]) out[m[1]] = m[2].replace(/^["']|["']$/g, "");
     }
   }
+  // VITE_BULLETZ_TOKEN is the HUMAN's credential — it is how the UI signs
+  // in — and stripping the VITE_ prefix turns it into exactly the variable
+  // the MCP bridge authenticates with. Left in place, an agent with no
+  // credential of its own quietly becomes the person who started it, which
+  // is the impersonation the whole actor model exists to prevent. The
+  // agent's identity is set below, from its own token, or not at all.
+  delete out["BULLETZ_TOKEN"];
   // The window's choice wins over the checked-in dev defaults: the agent and
   // the MCP bridge must talk to the SAME server the UI is signed in to, or the
   // agent reads one workspace and posts into another.
@@ -236,7 +243,12 @@ function storeServer(url: string | null) {
 function agentEnv(): Record<string, string> {
   const env = projectEnv();
   const agentToken = env["BULLETZ_AGENT_TOKEN"];
-  return agentToken ? { ...env, BULLETZ_TOKEN: agentToken } : env;
+  // No agent credential means no credential — never a borrowed one.
+  if (!agentToken) {
+    const { BULLETZ_TOKEN: _unused, ...rest } = env;
+    return rest;
+  }
+  return { ...env, BULLETZ_TOKEN: agentToken };
 }
 
 /**
@@ -314,8 +326,20 @@ type Terminal = {
   pty: IPty;
   buffer: string[];
   bytes: number;
+  /** The workspace this process was started against. A pty's environment is
+   *  fixed at spawn, so switching workspace or minting a credential never
+   *  reaches a session that is already running — it just starts answering
+   *  401 with no explanation. Recorded so a reattach can say so. */
+  startedWith: string;
 };
 const terminals = new Map<string, Terminal>();
+
+/** Identifies the workspace a pty was started against: which server, and
+ *  whether it had a credential for it. */
+function envFingerprint(): string {
+  const e = agentEnv();
+  return `${e["BULLETZ_SERVER_URL"] ?? ""}|${e["BULLETZ_TOKEN"] ? "auth" : "anon"}`;
+}
 
 /** The source the user picked, consumed by the next getDisplayMedia call. */
 let pendingShareSource: string | null = null;
@@ -516,6 +540,10 @@ app.whenReady().then(() => {
         shell: process.env.SHELL ?? "/bin/zsh",
         replay: reuse.buffer.join(""),
         reattached: true,
+        // Tell the view when this process predates the current workspace
+        // settings, so it can offer a restart rather than leaving someone to
+        // wonder why their agent is unauthorised.
+        stale: reuse.startedWith !== envFingerprint(),
       };
     }
 
@@ -552,7 +580,7 @@ app.whenReady().then(() => {
       },
     });
 
-    const term: Terminal = { pty, buffer: [], bytes: 0, kind: want };
+    const term: Terminal = { pty, buffer: [], bytes: 0, kind: want, startedWith: envFingerprint() };
 
     pty.onData((data) => {
       record(term, data);

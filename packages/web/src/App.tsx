@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
+import { ensureAgentCredential } from "./agentCredential.ts";
 import { Settings } from "./Settings.tsx";
 import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
 import { NotificationBell, type LocalNotification } from "./Notifications.tsx";
@@ -121,7 +122,13 @@ export function App() {
         endAddWorkspace();
         setAddingWorkspace(false);
         // Main runs the agent and the MCP bridge; they must follow the window.
-        void bridge()?.server?.set(account.serverUrl);
+        // Awaited, because the agent credential below is stored per server and
+        // would otherwise be filed against whichever workspace was last open.
+        await bridge()?.server?.set(account.serverUrl);
+        if (!live) return;
+        // And the agent in the dock gets an identity without anyone having to
+        // find the onboarding step for it.
+        void ensureAgentCredential(api);
       } catch (e) {
         if (!live) return;
         setAuthErr((e as Error).message);
