@@ -1,0 +1,61 @@
+# Bulletz on Dokploy.
+#
+# Use this as a Dokploy "Compose" application pointed at this repository. It
+# brings its own Postgres because the stock one has no pgvector, which the
+# schema needs.
+#
+# Dokploy supplies the TLS and the routing through Traefik; nothing here
+# publishes a port to the host, so the database is reachable only from the
+# server container and never from the internet.
+#
+# Set these in Dokploy's Environment tab:
+#
+#   POSTGRES_PASSWORD   generate one, e.g. `openssl rand -base64 32`
+#   PUBLIC_URL          https://bulletz.your-team.com
+#
+# Then add a Domain in Dokploy pointing at the `server` service on port 4000.
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bulletz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in Dokploy}
+      POSTGRES_DB: bulletz
+    volumes:
+      - bulletz-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bulletz -d bulletz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Deliberately no `ports:` — the database is for the server container, not
+    # for the internet. Reach it with `docker compose exec db psql` when needed.
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://bulletz:${POSTGRES_PASSWORD}@db:5432/bulletz
+      # The container must bind every interface or Traefik cannot reach it.
+      HOST: 0.0.0.0
+      PORT: 4000
+      # Serving the UI from the same origin as the API is what makes CORS
+      # unnecessary: the browser never makes a cross-origin request.
+      WEB_ROOT: /app/web
+      LOG_LEVEL: info
+      # Only needed if some OTHER origin must call this API — a separately
+      # hosted copy of the web UI, say. Same-origin and the desktop app both
+      # work without it.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    expose:
+      - "4000"
+
+volumes:
+  bulletz-pgdata:

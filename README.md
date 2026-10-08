@@ -143,11 +143,19 @@ Design rationale: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Self-hosting
 
-The server binds `127.0.0.1` and expects a reverse proxy in front of it. Before exposing it:
+Deploy guide, including Dokploy: **[docs/DEPLOY.md](docs/DEPLOY.md)**. The short
+version — the server and the web UI ship in one container, Postgres runs
+alongside, and your team points the desktop app at the hostname or opens it in
+a browser:
 
-- [ ] TLS and a real hostname (Caddy or nginx)
-- [ ] Postgres off the public interface
-- [ ] CORS allowlist instead of reflecting any origin
+```bash
+POSTGRES_PASSWORD=$(openssl rand -base64 32) \
+  docker compose -f docker-compose.deploy.yml up -d --build
+```
+
+Put TLS in front of it; the app has none of its own. Before exposing it:
+
+- [ ] TLS and a real hostname (Caddy, nginx, or Dokploy's Traefik)
 - [ ] Rate limits on `/v1/auth/*`
 - [ ] A TURN server if voice is used — without it, peers behind symmetric NAT cannot connect
 - [ ] Backups of the event log

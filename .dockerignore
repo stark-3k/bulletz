@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+# Without this, a local incremental build's state is copied in, tsc decides
+# everything is already built, and emits nothing — while dist/ is excluded, so
+# the output is simply missing. The failure looks like a module resolution bug.
+**/*.tsbuildinfo
+packages/desktop/release
+packages/web/.env.local
+.env
+.git
+.github
+docs
+*.md
