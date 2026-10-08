@@ -1333,9 +1333,9 @@ function TerminalDock({
         className={`term-resizer${dragging ? " dragging" : ""}`}
         onMouseDown={() => open && setDragging(true)}
       />
-      // Collapsed, the panel is exactly its tab row — measured by the browser
-        // rather than guessed. The hardcoded 28 was ~8px short of what the row
-        // actually needs, so the labels were quietly clipped at the bottom.
+        {/* Collapsed, the panel is exactly its tab row — measured by the
+            browser rather than guessed. The hardcoded 28 was ~8px short of
+            what the row actually needs, so the labels were clipped. */}
         <div className="term-panel" style={open ? { height } : undefined}>
         <div className="pane-head" style={{ borderBottom: "none", paddingBottom: 6 }}>
           <div className="tab-row">
