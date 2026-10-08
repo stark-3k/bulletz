@@ -3,7 +3,7 @@ import { BrowserWindow, Notification, app, desktopCapturer, dialog, ipcMain, nat
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { readFileSync as readFileSyncRaw, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 
@@ -701,11 +701,28 @@ app.whenReady().then(() => {
     const read = () => {
       try {
         return JSON.parse(readFileSync(file, "utf8")) as {
-          mcpServers?: Record<string, { env?: Record<string, string> }>;
+          mcpServers?: Record<string, { args?: unknown; env?: Record<string, string> }>;
         };
       } catch {
         return null;
       }
+    };
+
+    /**
+     * Connected means the agent will actually get a bridge, not that a key
+     * named "bulletz" is present.
+     *
+     * The weaker check cost real debugging time: this repository has a
+     * checked-in .mcp.json from before the bundle existed, pointing at a path
+     * that resolves in a source checkout and nowhere else. The panel reported
+     * "connected", the agent found no bridge, and nothing in between said so.
+     * So follow the entry to the file it names and see whether it is there.
+     */
+    const points = (entry: { args?: unknown } | undefined) => {
+      if (!entry) return false;
+      const args = Array.isArray(entry.args) ? entry.args.filter((a) => typeof a === "string") : [];
+      if (args.length === 0) return false;
+      return args.some((a) => existsSync(isAbsolute(a as string) ? (a as string) : join(dir, a as string)));
     };
 
     if (action === "connect") {
@@ -732,7 +749,7 @@ app.whenReady().then(() => {
       dir,
       file,
       exists: existsSync(file),
-      connected: Boolean(cfg?.mcpServers?.["bulletz"]),
+      connected: points(cfg?.mcpServers?.["bulletz"]),
       server,
       command: process.execPath,
       bundle: MCP_BUNDLE,
