@@ -1560,3 +1560,18 @@ button { font: inherit; cursor: pointer; }
 .auth-cancel { display: block; margin: 10px auto 0; }
 /* A link styled as the primary button needs the button's own box back. */
 a.send { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* Creating a channel happens in the list, not in a dialog: window.prompt is
+   not implemented in Electron, and a modal for one short string is heavier
+   than the thing it collects. */
+.new-channel {
+  display: flex; gap: 5px; padding: 7px 10px;
+  border-bottom: 1px solid var(--line-soft); background: var(--bg-raised);
+}
+.new-channel input {
+  flex: 1; min-width: 0; width: auto;
+  background: var(--bg-input); border: 1px solid var(--line); border-radius: 5px;
+  padding: 5px 8px; font-size: 12px; color: var(--fg);
+}
+.new-channel input:focus { outline: none; border-color: var(--accent-line); }
+.new-channel .send { flex: none; padding: 5px 10px; width: auto; }

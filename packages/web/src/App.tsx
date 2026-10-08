@@ -470,6 +470,8 @@ function Workspace({
   const [project, setProject] = useState<Project | null>(null);
   const [memOpen, setMemOpen] = useState(() => localStorage.getItem("bulletz.mem") !== "0");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The pending name while a channel is being created; null when idle. */
+  const [newChannel, setNewChannel] = useState<string | null>(null);
   const [liveNotifs, setLiveNotifs] = useState<import("@bulletz/shared").Notification[]>([]);
   const [localNotifs, setLocalNotifs] = useState<LocalNotification[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, { unread: number; mentions: number }>>({});
@@ -761,12 +763,24 @@ function Workspace({
 
   const active = channels.find((t) => t.id === activeId) ?? null;
 
-  const newThread = async () => {
-    const title = prompt("Channel title");
-    if (!title?.trim()) return;
-    const { channel } = await api.createChannel(title.trim());
-    setChannels((p) => [channel, ...p]);
+  /**
+   * Create a channel from the inline field in the sidebar.
+   *
+   * This used to call window.prompt(), which Electron does not implement — it
+   * throws "prompt() is not supported", the handler died before reaching the
+   * API, and the button simply did nothing with no error anywhere. Working in
+   * a browser and silently dead in the desktop app is the worst of both.
+   */
+  const createChannelNamed = async (title: string) => {
+    const name = title.trim();
+    if (!name) return;
+    const { channel } = await api.createChannel(name);
+    // The server broadcasts the new channel before it answers the request, so
+    // the socket has usually already added it by the time this resolves. An
+    // unguarded insert here showed the channel twice until the next reload.
+    setChannels((p) => (p.some((c) => c.id === channel.id) ? p : [channel, ...p]));
     setActiveId(channel.id);
+    setNewChannel(null);
   };
 
   /** Slash commands are how the decision log gets written by hand — the cheap
@@ -914,13 +928,42 @@ function Workspace({
               >
                 ▤
               </button>
-              <button className="icon-btn" onClick={newThread} title="New channel">
+              <button
+                className={`icon-btn${newChannel !== null ? " on" : ""}`}
+                onClick={() => setNewChannel((v) => (v === null ? "" : null))}
+                title="New channel"
+              >
                 +
               </button>
             </span>
           </div>
           <div className="pane-body">
-            {channels.length === 0 && <div className="empty" style={{ padding: "8px 13px" }}>No channels yet</div>}
+            {newChannel !== null && (
+              <form
+                className="new-channel"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void createChannelNamed(newChannel);
+                }}
+              >
+                <input
+                  value={newChannel}
+                  autoFocus
+                  maxLength={80}
+                  placeholder="channel name"
+                  onChange={(e) => setNewChannel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setNewChannel(null);
+                  }}
+                />
+                <button className="send" type="submit" disabled={!newChannel.trim()}>
+                  Add
+                </button>
+              </form>
+            )}
+            {channels.length === 0 && newChannel === null && (
+              <div className="empty" style={{ padding: "8px 13px" }}>No channels yet</div>
+            )}
             {channels.map((t) => (
               <ThreadRow
                 key={t.id}
