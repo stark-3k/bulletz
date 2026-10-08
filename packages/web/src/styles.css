@@ -338,6 +338,12 @@ button { font: inherit; cursor: pointer; }
 .term-panel {
   display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
   background: var(--bg); border-top: 1px solid var(--line);
+  /* The breathing room has to live out here rather than on .term-host.
+     xterm positions its rows absolutely and the last one overruns whatever
+     padding the host has, so content ended up flush against the window edge
+     however much padding was set inside. Reserving it on the panel puts the
+     gap below the clipping box, where nothing can overflow into it. */
+  padding-bottom: 8px;
 }
 
 .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
