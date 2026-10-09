@@ -198,9 +198,10 @@ function ProjectFolder() {
     <>
       <h4 className="spaced">Project folder</h4>
       <p className="muted">
-        Where the terminal opens and the agent reads and writes. Remembered <strong>per
-        workspace</strong>, so another workspace can point somewhere else — changing it here
-        changes it for this one only.
+        Where the terminal opens and the agent reads and writes. Choosing one also writes{" "}
+        <code>.mcp.json</code> there, which is what connects your agent to this workspace.
+        Remembered <strong>per workspace</strong>, so another workspace can point somewhere else
+        — changing it here changes it for this one only.
       </p>
       <div className="row">
         <code className="server-inline">{info.dir}</code>

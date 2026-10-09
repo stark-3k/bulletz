@@ -102,8 +102,10 @@ export function ProjectSetup({
       <div className="setup-card">
         <h2 className="setup-title">Where does {workspaceName}&apos;s code live?</h2>
         <p className="setup-sub">
-          The terminal opens here and your agent reads and writes here. It is remembered for this
-          workspace, so another workspace can point somewhere else.
+          The terminal opens here and your agent reads and writes here. Choosing it also writes{" "}
+          <code>.mcp.json</code>, which is how your agent reaches this workspace at all — without
+          it the agent starts in the right folder with no workspace tools. Remembered for this
+          workspace, so another one can point somewhere else.
         </p>
 
         {!picked ? (

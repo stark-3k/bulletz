@@ -437,6 +437,50 @@ function envFingerprint(): string {
   ].join("|");
 }
 
+/**
+ * Wire an agent in this folder to this workspace.
+ *
+ * An agent CLI discovers its MCP servers from a config file in the directory
+ * it runs in, so binding a folder to a workspace without writing this leaves
+ * the half-state that is easy to mistake for a broken product: the app knows
+ * the workspace, the agent starts in the right place, and it has no tools —
+ * it will tell you plainly that context_pack and post_message do not exist.
+ *
+ * The token is referenced, never written. A project folder is usually a git
+ * repository and a credential on disk there is one `git add .` from being
+ * published; the app puts it in the environment at spawn instead.
+ *
+ * .mcp.json is Claude Code's project-scoped format. Other agents keep their
+ * MCP servers elsewhere, so this wires the one and reports rather than
+ * pretending to have wired them all.
+ */
+function writeMcpConfig(dir: string): { file: string; wrote: boolean } {
+  const file = join(dir, ".mcp.json");
+  let existing: { mcpServers?: Record<string, unknown> } = {};
+  try {
+    existing = JSON.parse(readFileSync(file, "utf8")) as typeof existing;
+  } catch {
+    /* no config yet, or one we cannot parse — either way, start from ours */
+  }
+  const server = storedServer() ?? projectEnv()["BULLETZ_SERVER_URL"] ?? "";
+  const servers = { ...(existing.mcpServers ?? {}) };
+  servers["bulletz"] = {
+    // Run through Electron's own node, so the user does not need node
+    // installed for the bridge to work.
+    command: process.execPath,
+    args: [MCP_BUNDLE],
+    env: {
+      ELECTRON_RUN_AS_NODE: "1",
+      // The env wins, the written value is the fallback. Baking the URL
+      // outright made the file wrong the moment someone switched workspace.
+      BULLETZ_SERVER_URL: server ? `\${BULLETZ_SERVER_URL:-${server}}` : "${BULLETZ_SERVER_URL}",
+      BULLETZ_TOKEN: "${BULLETZ_TOKEN}",
+    },
+  };
+  writeFileSync(file, JSON.stringify({ ...existing, mcpServers: servers }, null, 2) + "\n");
+  return { file, wrote: true };
+}
+
 /** Tell every window that the workspace, credential or folder moved, so panes
  *  holding a pty from before can re-ask whether they are still current. */
 function announceEnvChange() {
@@ -845,6 +889,20 @@ app.whenReady().then(() => {
       const before = envFingerprint();
       storeProject(dir);
       const server = storedServer();
+
+      // Wire the agent here. Choosing the folder and connecting the agent to
+      // the workspace were two separate steps, the second buried in Settings,
+      // and skipping it produced an agent that starts in the right directory
+      // and reports that it has no workspace tools at all. Binding a folder
+      // to a workspace is exactly the moment to say what that means.
+      let mcp: string | null = null;
+      try {
+        mcp = writeMcpConfig(dir).file;
+      } catch {
+        // A read-only folder is a real situation and not a reason to refuse
+        // the binding; the Agent panel still offers the write on its own.
+      }
+
       let wrote = false;
       if (write && server) {
         try {
@@ -853,13 +911,13 @@ app.whenReady().then(() => {
         } catch (e) {
           // Worth reporting and not worth failing the binding over: the folder
           // is bound either way, the file is a convenience for other people.
-          return { ok: true, dir, wrote: false, error: (e as Error).message };
+          return { ok: true, dir, mcp, wrote: false, error: (e as Error).message };
         }
       }
       // A running pty cannot be moved to a new cwd, so the panes need to hear
       // that they are now in the wrong place.
       if (envFingerprint() !== before) announceEnvChange();
-      return { ok: true, dir, wrote };
+      return { ok: true, dir, mcp, wrote };
     },
   );
 
@@ -876,6 +934,11 @@ app.whenReady().then(() => {
     if (res.canceled || !res.filePaths[0]) return { dir: projectRoot(), changed: false };
     const before = envFingerprint();
     storeProject(res.filePaths[0]);
+    try {
+      writeMcpConfig(res.filePaths[0]);
+    } catch {
+      /* read-only folder; the Agent panel still offers it explicitly */
+    }
     if (envFingerprint() !== before) announceEnvChange();
     // Existing shells keep their old cwd; a pty cannot be moved. New ones pick
     // the change up, and the UI says so.
@@ -945,30 +1008,7 @@ app.whenReady().then(() => {
       };
     }
 
-    if (action === "connect") {
-      const existing = read() ?? {};
-      const servers = existing.mcpServers ?? {};
-      // Run through Electron's own node, so the user does not need node
-      // installed for the bridge to work. The token is referenced rather than
-      // written: a project folder is often a git repository, and a credential
-      // on disk there is one `git add .` from being published.
-      servers["bulletz"] = {
-        command: process.execPath,
-        args: [MCP_BUNDLE],
-        env: {
-          ELECTRON_RUN_AS_NODE: "1",
-          // The env wins, the written value is the fallback. Baking the URL
-          // outright made the file wrong the moment someone switched
-          // workspace — it named whichever one was open when Connect was
-          // clicked, in a file that lives in a repository. The app supplies
-          // the variable at spawn; an agent launched from a plain terminal
-          // still has something to fall back to.
-          BULLETZ_SERVER_URL: server ? `\${BULLETZ_SERVER_URL:-${server}}` : "${BULLETZ_SERVER_URL}",
-          BULLETZ_TOKEN: "${BULLETZ_TOKEN}",
-        },
-      } as never;
-      writeFileSync(file, JSON.stringify({ ...existing, mcpServers: servers }, null, 2) + "\n");
-    }
+    if (action === "connect") writeMcpConfig(dir);
 
     const cfg = read();
     return {
