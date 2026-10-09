@@ -11,6 +11,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { allow, requireActor } from "../authHook.js";
+import { can } from "../identity.js";
 import { maybeOne, one, q } from "../db.js";
 import * as repo from "../repo.js";
 import { broadcast } from "../realtime.js";
@@ -250,16 +251,38 @@ export async function apiRoutes(app: FastifyInstance) {
     return { event };
   });
 
-  /** Delete. A tombstone revision, not an erasure: the row survives for audit.
-   *  Real redaction (overwriting the stored text) is a separate feature. */
+  /**
+   * Delete. A tombstone revision, not an erasure: the row survives for audit.
+   * Real redaction (overwriting the stored text) is a separate feature.
+   *
+   * The sender may remove their own; an owner or admin may remove anyone's,
+   * because a workspace with no way to take something down is a workspace
+   * where one bad paste is permanent. Editing stays sender-only — removing
+   * someone's words is moderation, rewriting them under their name is
+   * forgery, and the two should never share a permission.
+   *
+   * A tombstone is authored by whoever pulled the trigger, which is right for
+   * the log and wrong for the channel: the UI renders the head event's
+   * handle, so an admin deleting someone else's message would put the admin's
+   * name where the author's used to be. The payload carries both, so neither
+   * reading is lost.
+   */
   app.delete("/events/:id", async (req, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const head = await repo.eventHead(req.actor.workspace_id, id);
     if (!head) return reply.code(404).send({ error: "event not found" });
-    if (head.actor_id !== req.actor.id) {
-      return reply.code(403).send({ error: "only the sender can delete this message" });
+
+    const own = head.actor_id === req.actor.id;
+    if (!own && !can(req.actor, "moderate")) {
+      return reply
+        .code(403)
+        .send({ error: `only the sender or an admin can delete this message` });
     }
     if (head.kind === "message_deleted") return { event: null, already: true };
+
+    const author = await maybeOne<{ handle: string }>(`select handle from actors where id = $1`, [
+      head.actor_id,
+    ]);
 
     const event = await repo.appendEvent({
       workspaceId: req.actor.workspace_id,
@@ -269,6 +292,11 @@ export async function apiRoutes(app: FastifyInstance) {
       body: null,
       revisionOf: head.id,
       replyTo: head.reply_to,
+      payload: {
+        author_actor_id: head.actor_id,
+        ...(author?.handle ? { author_handle: author.handle } : {}),
+        ...(own ? {} : { removed_by_handle: req.actor.handle, by_moderator: true }),
+      },
     });
     broadcast(req.actor.workspace_id, { type: "event", event });
     return { event };

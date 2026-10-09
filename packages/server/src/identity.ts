@@ -136,6 +136,13 @@ export const CAPABILITIES = {
   write: ["owner", "admin", "member"],
   /** Changing the shape of the workspace, not just its contents. */
   activate: ["owner", "admin"],
+  /** Removing someone else's message. Separate from `activate` because it is
+   *  a different kind of power — over people's words rather than over the
+   *  workspace's machinery — and someone reading this list should be able to
+   *  see which roles hold it without inferring it from a widget permission.
+   *  Note what it does NOT include: editing. Rewriting what someone said,
+   *  under their name, is forgery, and no role gets to do it. */
+  moderate: ["owner", "admin"],
   manage_members: ["owner", "admin"],
   /** Only an owner can hand over or remove ownership. */
   manage_owners: ["owner"],

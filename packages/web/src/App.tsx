@@ -36,6 +36,29 @@ const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase
 const time = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+/**
+ * Who wrote the message a tombstone replaces, and who took it down.
+ *
+ * The tombstone's own actor is whoever deleted it, so rendering that handle
+ * puts an admin's name where the author's used to be — the channel would read
+ * as though the admin had written and then retracted someone else's message.
+ * The payload carries the authorship for exactly this.
+ */
+/** Owners and admins may take any message down. Mirrors the server's
+ *  `moderate` capability — the server is the one that enforces it; this only
+ *  decides whether to offer the button. */
+const CAN_MODERATE = new Set(["owner", "admin"]);
+const moderates = (me: { role?: string }) => CAN_MODERATE.has(me.role ?? "");
+
+function tombstone(e: Event): { who: string | undefined; note: string } {
+  const p = e.payload as { author_handle?: string; removed_by_handle?: string } | undefined;
+  const who = p?.author_handle ?? e.actor_handle;
+  return {
+    who,
+    note: p?.removed_by_handle ? `message removed by ${p.removed_by_handle}` : "message deleted",
+  };
+}
+
 const AGENT_UNAVAILABLE = {
   "no-session": "_No agent session running. Open the Agent tab below._",
   // Naming the fix matters: the session is right there and looks alive, so
@@ -1246,7 +1269,7 @@ function Stream({
   events: Event[];
   widgets: WidgetRow[];
   api: Api;
-  me: { id: string };
+  me: { id: string; role?: string };
   onChange: () => void;
   onOpenThread: (rootId: string) => void;
   onAskAgent: (e: Event, instruction: string) => Promise<void>;
@@ -1261,15 +1284,16 @@ function Stream({
       {events.length === 0 && <div className="empty">Nothing in this channel yet.</div>}
       {events.map((e) => {
         if (e.kind === "message_deleted") {
+          const t = tombstone(e);
           return (
             <div className="msg tombstone" key={e.id}>
               <div className="avatar ghost">—</div>
               <div className="msg-main">
                 <div className="msg-head">
-                  <span className="msg-who">{e.actor_handle}</span>
+                  <span className="msg-who">{t.who}</span>
                   <span className="msg-time">{time(e.created_at)}</span>
                 </div>
-                <div className="msg-deleted">message deleted</div>
+                <div className="msg-deleted">{t.note}</div>
               </div>
             </div>
           );
@@ -1280,6 +1304,7 @@ function Stream({
               key={e.id}
               e={e}
               mine={e.actor_id === me.id}
+              canModerate={moderates(me)}
               api={api}
               onOpenThread={onOpenThread}
               onAskAgent={onAskAgent}
@@ -1553,7 +1578,7 @@ function ThreadPanel({
 }: {
   rootId: string;
   api: Api;
-  me: { id: string };
+  me: { id: string; role?: string };
   onClose: () => void;
 }) {
   const [root, setRoot] = useState<Event | null>(null);
@@ -1612,7 +1637,9 @@ function ThreadPanel({
       </div>
       <div className="pane-body">
         <div className="stream">
-          {root && <Message e={root} mine={root.actor_id === me.id} api={api} inThread />}
+          {root && (
+            <Message e={root} mine={root.actor_id === me.id} canModerate={moderates(me)} api={api} inThread />
+          )}
           <div className="thread-divider">
             <span>
               {live} {live === 1 ? "reply" : "replies"}
@@ -1624,13 +1651,20 @@ function ThreadPanel({
                 <div className="avatar ghost">—</div>
                 <div className="msg-main">
                   <div className="msg-head">
-                    <span className="msg-who">{r.actor_handle}</span>
+                    <span className="msg-who">{tombstone(r).who}</span>
                   </div>
-                  <div className="msg-deleted">message deleted</div>
+                  <div className="msg-deleted">{tombstone(r).note}</div>
                 </div>
               </div>
             ) : (
-              <Message key={r.id} e={r} mine={r.actor_id === me.id} api={api} inThread />
+              <Message
+                key={r.id}
+                e={r}
+                mine={r.actor_id === me.id}
+                canModerate={moderates(me)}
+                api={api}
+                inThread
+              />
             ),
           )}
         </div>
@@ -1661,6 +1695,7 @@ function ThreadPanel({
 function Message({
   e,
   mine,
+  canModerate = false,
   api,
   onOpenThread,
   onAskAgent,
@@ -1668,6 +1703,8 @@ function Message({
 }: {
   e: Event;
   mine: boolean;
+  /** Owner or admin: may take anyone's message down, but never rewrite one. */
+  canModerate?: boolean;
   api: Api;
   onOpenThread?: (rootId: string) => void;
   onAskAgent?: (e: Event, instruction: string) => Promise<void>;
@@ -1734,9 +1771,17 @@ function Message({
             <span className={`msg-actions${confirming ? " confirming" : ""}`}>
               {confirming ? (
                 <>
-                  <span className="confirm-ask">Delete this message?</span>
+                  {/* Taking down someone else's message is a different act
+                      from deleting your own, and the prompt should not
+                      pretend otherwise — it says whose, and that they will
+                      see it was you. */}
+                  <span className="confirm-ask">
+                    {mine
+                      ? "Delete this message?"
+                      : `Remove ${e.actor_handle ?? "this person"}'s message? They will see it was removed by you.`}
+                  </span>
                   <button className="danger solid" autoFocus disabled={busy} onClick={() => void remove()}>
-                    {busy ? "Deleting…" : "Delete"}
+                    {busy ? (mine ? "Deleting…" : "Removing…") : mine ? "Delete" : "Remove"}
                   </button>
                   <button onClick={() => setConfirming(false)}>Cancel</button>
                 </>
@@ -1748,10 +1793,16 @@ function Message({
                     </button>
                   )}
                   {mine && (
-                    <>
-                      <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
-                      <button className="danger" onClick={() => setConfirming(true)}>Delete</button>
-                    </>
+                    <button onClick={() => { setDraft(e.body ?? ""); setEditing(true); }}>Edit</button>
+                  )}
+                  {/* Edit is the author's alone; delete is also an admin's.
+                      Rewriting someone's words under their name is a
+                      different act from taking them down, so the two buttons
+                      do not travel together. */}
+                  {(mine || canModerate) && (
+                    <button className="danger" onClick={() => setConfirming(true)}>
+                      {mine ? "Delete" : "Remove"}
+                    </button>
                   )}
                 </>
               )}
