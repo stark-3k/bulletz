@@ -16,7 +16,13 @@ contextBridge.exposeInMainWorld("bulletz", {
     write: (id: string, data: string) => ipcRenderer.send("term:write", { id, data }),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.send("term:resize", { id, cols, rows }),
-    kill: (id: string) => ipcRenderer.send("term:kill", { id }),
+    kill: (id: string) => ipcRenderer.invoke("term:kill", { id }) as Promise<boolean>,
+    isStale: (id: string) => ipcRenderer.invoke("term:stale", { id }) as Promise<boolean>,
+    onEnvChanged: (cb: () => void) => {
+      const h = () => cb();
+      ipcRenderer.on("term:env-changed", h);
+      return () => ipcRenderer.removeListener("term:env-changed", h);
+    },
     onData: (cb: (id: string, data: string) => void) => {
       const h = (_e: unknown, p: { id: string; data: string }) => cb(p.id, p.data);
       ipcRenderer.on("term:data", h);

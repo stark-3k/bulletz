@@ -25,18 +25,50 @@ app.setName("Bulletz");
  */
 const projectFile = () => join(app.getPath("userData"), "project.json");
 
-function storedProject(): string | null {
+/**
+ * One folder per workspace, keyed by server URL — the same shape the agent
+ * credential uses, for the same reason.
+ *
+ * The folder and the workspace are not the same axis: you open a terminal
+ * somewhere because that is the code you are touching, while the workspace
+ * decides whose memory the agent can read. But a single global folder made
+ * switching workspace a no-op for the agent, which sat in the previous team's
+ * checkout and answered from it. Remembering the choice per workspace is what
+ * lets a switch mean something without pretending the two are one thing.
+ */
+type Projects = { byServer?: Record<string, string>; dir?: string };
+
+function readProjects(): Projects {
   try {
-    const raw = JSON.parse(readFileSync(projectFile(), "utf8")) as { dir?: string };
-    return typeof raw.dir === "string" && raw.dir && existsSync(raw.dir) ? raw.dir : null;
+    return JSON.parse(readFileSync(projectFile(), "utf8")) as Projects;
   } catch {
-    return null;
+    return {};
   }
 }
 
-function storeProject(dir: string | null) {
+function storedProject(serverUrl?: string | null): string | null {
+  const raw = readProjects();
+  const usable = (d?: string) => (typeof d === "string" && d && existsSync(d) ? d : null);
+  const key = serverUrl ?? storedServer();
+  if (key && raw.byServer?.[key]) return usable(raw.byServer[key]);
+  // The pre-multi-workspace file held one folder with no server attached. It
+  // stands in until this workspace has a folder of its own, which is what the
+  // single-workspace install should see: no change at all.
+  return usable(raw.dir);
+}
+
+function storeProject(dir: string | null, serverUrl?: string | null) {
+  const key = serverUrl ?? storedServer();
+  const raw = readProjects();
+  const byServer = { ...(raw.byServer ?? {}) };
+  if (key) {
+    if (dir) byServer[key] = dir;
+    else delete byServer[key];
+  }
   mkdirSync(app.getPath("userData"), { recursive: true });
-  writeFileSync(projectFile(), JSON.stringify({ dir }, null, 2));
+  // The unkeyed folder is dropped once a keyed one exists, so it cannot later
+  // be mistaken for a workspace that never chose anything.
+  writeFileSync(projectFile(), JSON.stringify(key ? { byServer } : { dir }, null, 2));
 }
 
 function projectRoot(): string {
@@ -349,11 +381,25 @@ type Terminal = {
 };
 const terminals = new Map<string, Terminal>();
 
-/** Identifies the workspace a pty was started against: which server, and
- *  whether it had a credential for it. */
+/** Identifies the workspace a pty was started against: which server, whether
+ *  it had a credential for it, and the folder it was started in. The folder
+ *  belongs here because it is now per workspace — switching teams moves the
+ *  cwd, and a pty cannot be moved after it is spawned. */
 function envFingerprint(): string {
   const e = agentEnv();
-  return `${e["BULLETZ_SERVER_URL"] ?? ""}|${e["BULLETZ_TOKEN"] ? "auth" : "anon"}`;
+  return [
+    e["BULLETZ_SERVER_URL"] ?? "",
+    e["BULLETZ_TOKEN"] ? "auth" : "anon",
+    projectRoot(),
+  ].join("|");
+}
+
+/** Tell every window that the workspace, credential or folder moved, so panes
+ *  holding a pty from before can re-ask whether they are still current. */
+function announceEnvChange() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send("term:env-changed");
+  }
 }
 
 /** The source the user picked, consumed by the next getDisplayMedia call. */
@@ -645,15 +691,30 @@ app.whenReady().then(() => {
   });
 
   // Only an explicit kill ends a shell. A view going away is not one.
-  ipcMain.on("term:kill", (_e, { id }: { id: string }) => {
+  // Answered, not fire-and-forget. Restart is kill-then-remount, and a send
+  // races the spawn that follows it: the new pane would reattach to the pty
+  // it just asked to die, come back marked stale, and look like the button
+  // did nothing. The caller can wait for this one.
+  ipcMain.handle("term:kill", (_e, { id }: { id: string }) => {
     terminals.get(id)?.pty.kill();
     terminals.delete(id);
+    return true;
   });
 
   ipcMain.handle("agent:token", (_e, token: unknown) => {
     if (token === undefined) return storedAgentToken() !== null;
+    const before = envFingerprint();
     storeAgentToken(typeof token === "string" && token ? token : null);
+    // Minting the credential while a session is already running is the common
+    // case on a first launch, and that session cannot be handed it.
+    if (envFingerprint() !== before) announceEnvChange();
     return storedAgentToken() !== null;
+  });
+
+  /** Is this pty still the right one for the workspace the window is in? */
+  ipcMain.handle("term:stale", (_e, { id }: { id: string }) => {
+    const t = terminals.get(id);
+    return t ? t.startedWith !== envFingerprint() : false;
   });
 
   /** An OS notification, and the dock badge that goes with it. The renderer
@@ -784,7 +845,13 @@ app.whenReady().then(() => {
         args: [MCP_BUNDLE],
         env: {
           ELECTRON_RUN_AS_NODE: "1",
-          BULLETZ_SERVER_URL: server || "${BULLETZ_SERVER_URL}",
+          // The env wins, the written value is the fallback. Baking the URL
+          // outright made the file wrong the moment someone switched
+          // workspace — it named whichever one was open when Connect was
+          // clicked, in a file that lives in a repository. The app supplies
+          // the variable at spawn; an agent launched from a plain terminal
+          // still has something to fall back to.
+          BULLETZ_SERVER_URL: server ? `\${BULLETZ_SERVER_URL:-${server}}` : "${BULLETZ_SERVER_URL}",
           BULLETZ_TOKEN: "${BULLETZ_TOKEN}",
         },
       } as never;
@@ -823,7 +890,15 @@ app.whenReady().then(() => {
 
   ipcMain.handle("server:get", () => storedServer());
   ipcMain.handle("server:set", (_e, url: unknown) => {
+    const before = envFingerprint();
     storeServer(typeof url === "string" && url ? url : null);
+    // Staleness used to be decided once, when a pane mounted. That is too
+    // early: switching workspace reloads the renderer, the panes reattach
+    // immediately, and this call only arrives afterwards — once /me has come
+    // back and told the window which workspace it is in. So every running
+    // session was judged against the workspace it was already in and declared
+    // current. Say when the ground moves, and let the panes re-ask.
+    if (envFingerprint() !== before) announceEnvChange();
     return storedServer();
   });
 

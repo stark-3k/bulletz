@@ -3,10 +3,16 @@ const TOKEN = process.env.BULLETZ_TOKEN ?? "";
 
 export class BulletzError extends Error {}
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   if (!TOKEN) throw new BulletzError("BULLETZ_TOKEN is not set");
   const res = await fetch(`${BASE}/v1${path}`, {
     method,
+    ...(signal ? { signal } : {}),
     headers: {
       authorization: `Bearer ${TOKEN}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -21,7 +27,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const api = {
-  get: <T>(path: string) => call<T>("GET", path),
+  get: <T>(path: string, signal?: AbortSignal) => call<T>("GET", path, undefined, signal),
   post: <T>(path: string, body: unknown) => call<T>("POST", path, body),
   patch: <T>(path: string, body: unknown) => call<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => call<T>("PUT", path, body),
@@ -34,3 +40,6 @@ export const qs = (params: Record<string, string | number | boolean | undefined>
   const s = sp.toString();
   return s ? `?${s}` : "";
 };
+
+/** Where this bridge is pointed, for messages that have to name it. */
+export const BASE_URL = BASE;

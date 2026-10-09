@@ -35,6 +35,13 @@ const initials = (h: string) => h.replace(/^agent-/, "").slice(0, 2).toUpperCase
 const time = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+const AGENT_UNAVAILABLE = {
+  "no-session": "_No agent session running. Open the Agent tab below._",
+  // Naming the fix matters: the session is right there and looks alive, so
+  // "no agent" would read as a lie.
+  stale: "_The agent session below was started against a different workspace. Restart it from the Agent tab and ask again._",
+} as const;
+
 export function App() {
   // Dev-only probe: an error boundary nobody has ever tripped is a liability,
   // and a boundary can only catch a throw that happens DURING a render — so
@@ -480,27 +487,35 @@ function Workspace({
    *  which is also how "send to agent" knows whether it can offer itself.
    *  Stored in a ref box because a function in state would be called as an
    *  updater. */
-  const [agentWrite, setAgentWriteRaw] = useState<{ fn: ((d: string) => void) | null }>({ fn: null });
+  const [agentWrite, setAgentWriteRaw] = useState<{ fn: ((d: string) => boolean) | null }>({ fn: null });
   const setAgentWrite = useCallback(
-    (fn: ((d: string) => void) | null) => setAgentWriteRaw({ fn }),
+    (fn: ((d: string) => boolean) | null) => setAgentWriteRaw({ fn }),
     [],
   );
-  /** Type something into the live agent session. Returns false when there is
-   *  no session to type into. */
+  /**
+   * Type something into the live agent session.
+   *
+   * Three outcomes, not two, because "nothing happened" has two very
+   * different causes and only one of them is fixed by opening a tab. A pty's
+   * environment is fixed at spawn, so a session that was running when this
+   * window switched workspace still holds the previous team's credential —
+   * handing it this team's message is how the two get crossed, and the only
+   * honest answer is to decline and say which it is.
+   */
   const sendToAgent = useCallback(
-    (text: string) => {
+    (text: string): "sent" | "no-session" | "stale" => {
       const w = agentWrite.fn;
-      if (!w || !text.trim()) return false;
+      if (!w || !text.trim()) return "no-session";
       // Bracketed paste, not raw text. A newline typed into a terminal UI is
       // Enter, so a multi-line prompt written literally would be submitted
       // one line at a time — seven half-questions instead of one. Wrapping it
       // in the paste markers is how a terminal says "this is one block", and
       // every TUI that accepts pasted input understands them.
       const body = text.trim().replace(/\r\n?/g, "\n");
-      w(`\x1b[200~${body}\x1b[201~`);
+      if (!w(`\x1b[200~${body}\x1b[201~`)) return "stale";
       // Submit separately, once, after the paste has landed.
       setTimeout(() => w("\r"), 60);
-      return true;
+      return "sent";
     },
     [agentWrite],
   );
@@ -771,12 +786,8 @@ function Workspace({
         ev.id,
       );
 
-      if (!sendToAgent(prompt)) {
-        await api.postMessage(
-          activeId,
-          "_No agent session running. Open the Agent tab below._",
-        );
-      }
+      const outcome = sendToAgent(prompt);
+      if (outcome !== "sent") await api.postMessage(activeId, AGENT_UNAVAILABLE[outcome]);
     },
     [activeId, api, sendToAgent, framedAsk],
   );
@@ -844,12 +855,8 @@ function Workspace({
       const prompt = text.replace(/^@agent\s+/, "").trim();
       // The agent is a live session now, not a one-shot run: the ask is typed
       // into it the way you would type it yourself, and you can keep talking.
-      if (!sendToAgent(framedAsk(prompt))) {
-        await api.postMessage(
-          activeId,
-          "_No agent session running. Open the Agent tab below._",
-        );
-      }
+      const outcome = sendToAgent(framedAsk(prompt));
+      if (outcome !== "sent") await api.postMessage(activeId, AGENT_UNAVAILABLE[outcome]);
     } else if (task?.[1]) {
       await api.createTask({ title: task[1].trim(), channel_id: activeId });
     } else {
@@ -1127,7 +1134,7 @@ function TerminalDock({
 }: {
   /** Handed the agent session's writer, so a highlighted message can be sent
    *  into it from the chat pane above. */
-  onAgentReady: (write: ((data: string) => void) | null) => void;
+  onAgentReady: (write: ((data: string) => boolean) | null) => void;
 }) {
   const [height, setHeight] = useState(() => Number(localStorage.getItem("bulletz.termH") ?? 260));
   // Both docked panes are desktop-only — a pty and a local agent — so in a

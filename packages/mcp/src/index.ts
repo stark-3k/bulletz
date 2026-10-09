@@ -10,9 +10,66 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Decision, Event, Note, SearchHit, Task, Channel } from "@bulletz/shared";
 import { z } from "zod";
-import { api, qs } from "./client.js";
+import { BASE_URL, api, qs } from "./client.js";
 
-const server = new McpServer({ name: "bulletz", version: "0.1.0" });
+/**
+ * What this bridge is attached to, said before the agent does anything.
+ *
+ * MCP hands the server a place to introduce itself at initialize, and until
+ * now this one said only its name — so an agent saw a pile of tools with no
+ * idea whose workspace they reached. That gap is invisible until someone is
+ * signed in to two: the agent keeps answering, from whichever team happened
+ * to be open when its session started, and nothing in the transcript says
+ * which. Naming it here costs one request per session and none per turn, and
+ * because it is plain MCP every agent gets the same orientation rather than
+ * whatever prose one client happens to inject.
+ */
+async function orientation(): Promise<string> {
+  const ground = [
+    "Your working directory and this workspace are independent: the directory is",
+    "the code you are editing, this is the team you are editing it for. Nothing in",
+    "the checkout tells you what is here.",
+    "",
+    "You act under your own identity, not that of the person who started you —",
+    "anything you post is attributed to the agent.",
+  ];
+  try {
+    // Bounded: a hung network must not stop the agent getting its tools. An
+    // unreachable workspace is worth saying, not worth hanging for.
+    const signal = AbortSignal.timeout(5000);
+    const [me, project] = await Promise.all([
+      api.get<{ actor: { handle: string } }>("/me", signal),
+      api.get<{ name: string; summary: string | null }>("/project", signal),
+    ]);
+    const summary = project.summary?.trim();
+    return [
+      `You are connected to the "${project.name}" workspace through bulletz, as ${me.actor.handle}.`,
+      "",
+      summary ? `${summary.slice(0, 1500)}${summary.length > 1500 ? "…" : ""}` : "_This workspace has no summary recorded yet._",
+      "",
+      "It holds the team's memory — decisions in force, durable constraints, open",
+      "work, notes and channel history. Call `context_pack` before answering",
+      "anything about why the project is the way it is.",
+      "",
+      ...ground,
+    ].join("\n");
+  } catch (e) {
+    return [
+      `This is the bulletz bridge, pointed at ${BASE_URL}, which did not answer:`,
+      `${e instanceof Error ? e.message : String(e)}`,
+      "",
+      "Its tools will fail the same way until that is fixed. Say so rather than",
+      "answering from the checkout alone — the workspace is the part you cannot see.",
+      "",
+      ...ground,
+    ].join("\n");
+  }
+}
+
+const server = new McpServer(
+  { name: "bulletz", version: "0.1.0" },
+  { instructions: await orientation() },
+);
 
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 const fail = (e: unknown) => ({

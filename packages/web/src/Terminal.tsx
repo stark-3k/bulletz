@@ -29,7 +29,12 @@ type Bridge = {
     }>;
     write: (id: string, data: string) => void;
     resize: (id: string, cols: number, rows: number) => void;
-    kill: (id: string) => void;
+    kill: (id: string) => Promise<boolean>;
+    /** Whether this pty predates the workspace the window is now in. Asked
+     *  again whenever main says the ground moved, because a pane cannot
+     *  decide this once at mount and be right afterwards. */
+    isStale: (id: string) => Promise<boolean>;
+    onEnvChanged: (cb: () => void) => () => void;
     onData: (cb: (id: string, data: string) => void) => () => void;
     onExit: (cb: (id: string, code: number) => void) => () => void;
   };
@@ -164,7 +169,9 @@ export function TerminalPane({
   kind?: "shell" | "agent";
   /** Hands back a writer so other parts of the app can type into this
    *  session — sending a highlighted message to the agent, for instance. */
-  onReady?: (write: ((data: string) => void) | null) => void;
+  /** The writer refuses while the session is stale, so a caller must look at
+   *  what it returns rather than assume the text landed. */
+  onReady?: (write: ((data: string) => boolean) | null) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [cwd, setCwd] = useState<string>("");
@@ -173,6 +180,9 @@ export function TerminalPane({
   const [startError, setStartError] = useState<string | null>(null);
   const [needsProject, setNeedsProject] = useState(false);
   const [stale, setStale] = useState(false);
+  // The writer handed out below is made once, at spawn, so it cannot close
+  // over the state — it reads the ref instead.
+  const staleRef = useRef(false);
   // Bumping this tears the view down and builds a fresh one, which is what a
   // restart is: the old pty is already gone, so spawn makes a new shell.
   const [generation, setGeneration] = useState(0);
@@ -227,8 +237,17 @@ export function TerminalPane({
       if (info.replay) term.write(info.replay);
       setReattached(info.reattached);
       setStale(Boolean(info.stale));
-      // Expose a writer so a highlighted message can be sent straight in.
-      onReady?.((data: string) => api.term.write(id, data));
+      staleRef.current = Boolean(info.stale);
+      // Expose a writer so a highlighted message can be sent straight in — and
+      // one that refuses while this session belongs to another workspace.
+      // Feeding one team's message to an agent holding another team's
+      // credential is the mistake the stale badge exists to prevent, and a
+      // badge alone only prevents it for someone who happens to look.
+      onReady?.((data: string) => {
+        if (staleRef.current) return false;
+        api.term.write(id, data);
+        return true;
+      });
     });
 
     term.onData((d) => {
@@ -261,6 +280,22 @@ export function TerminalPane({
       term.dispose();
     };
   }, [api, id, generation]);
+
+  // Re-ask whenever main says the workspace, credential or folder moved. The
+  // answer cannot be settled at mount: switching workspace reloads the window,
+  // the pane reattaches straight away, and the switch itself only lands once
+  // the new workspace has answered /me.
+  useEffect(() => {
+    const b = bridge();
+    if (!b?.term?.onEnvChanged || !b.term.isStale) return;
+    const recheck = () =>
+      void b.term.isStale(id).then((v) => {
+        setStale(v);
+        staleRef.current = v;
+      });
+    recheck();
+    return b.term.onEnvChanged(recheck);
+  }, [id, generation]);
 
   if (!api) {
     return (
@@ -296,10 +331,13 @@ export function TerminalPane({
               className="term-restart"
               onClick={() => {
                 // Remounting alone would reattach to the same stale process,
-                // so it has to actually end first.
-                api?.term.kill(id);
-                setStale(false);
-                setGeneration((g) => g + 1);
+                // so it has to actually end first — and be *known* to have
+                // ended before the remount asks for a pty by the same id.
+                void api?.term.kill(id).then(() => {
+                  setStale(false);
+                  staleRef.current = false;
+                  setGeneration((g) => g + 1);
+                });
               }}
             >
               Restart
