@@ -178,29 +178,44 @@ function Account({ api, me, run }: { api: Api; me: { handle: string; role: strin
  *  Running from source this is the repo; an installed copy has no repo, so it
  *  has to be told — and until it is, it falls back to home. */
 function ProjectFolder() {
-  const [info, setInfo] = useState<{ dir: string; chosen: boolean; packaged: boolean } | null>(null);
+  const [info, setInfo] = useState<Awaited<
+    ReturnType<NonNullable<NonNullable<ReturnType<typeof bridge>>["project"]>["get"]>
+  > | null>(null);
   const [note, setNote] = useState("");
 
-  useEffect(() => {
-    void bridge()?.project?.get().then(setInfo);
-  }, []);
+  const load = useCallback(() => void bridge()?.project?.get().then(setInfo), []);
+  useEffect(load, [load]);
 
   if (!info) return null;
+
+  const claim = info.config;
+  const elsewhere =
+    claim && info.server && claim.server.replace(/\/+$/, "") !== info.server.replace(/\/+$/, "")
+      ? claim
+      : null;
 
   return (
     <>
       <h4 className="spaced">Project folder</h4>
       <p className="muted">
-        Where the terminal opens and the agent reads and writes. Your agent also looks here for
-        its <code>.mcp.json</code>.
+        Where the terminal opens and the agent reads and writes. Remembered <strong>per
+        workspace</strong>, so another workspace can point somewhere else — changing it here
+        changes it for this one only.
       </p>
       <div className="row">
         <code className="server-inline">{info.dir}</code>
       </div>
       {!info.chosen && info.packaged && (
         <p className="muted warn">
-          Not set yet, so this is your home folder. Pick the project you actually want the agent
-          working in.
+          Not set for this workspace. The terminal and the agent will not start until it is —
+          nothing is run in a folder nobody chose.
+        </p>
+      )}
+      {elsewhere && (
+        <p className="muted warn">
+          This folder carries a <code>bulletz.json</code> naming a different workspace
+          {elsewhere.workspace ? ` (${elsewhere.workspace})` : ""} at <code>{elsewhere.server}</code>.
+          Nothing has acted on it — it is a claim by whoever wrote the file.
         </p>
       )}
       <div className="row">
@@ -211,10 +226,10 @@ function ProjectFolder() {
               ?.project?.choose()
               .then((r) => {
                 if (!r.changed) return;
-                setInfo((v) => (v ? { ...v, dir: r.dir, chosen: true } : v));
-                // A running shell cannot be moved to a new cwd, so say so
-                // rather than letting the terminal quietly disagree.
-                setNote("Saved. Open a new terminal for it to start there.");
+                load();
+                // A running shell cannot be moved to a new cwd. The pane says
+                // so itself now and offers Restart, so point at that.
+                setNote("Saved. A running session is marked stale — restart it from the dock.");
               })
           }
         >

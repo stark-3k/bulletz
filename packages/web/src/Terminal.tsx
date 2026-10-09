@@ -49,8 +49,29 @@ type Bridge = {
   };
   appVersion?: () => Promise<string>;
   project?: {
-    get: () => Promise<{ dir: string; chosen: boolean; packaged: boolean }>;
-    choose: () => Promise<{ dir: string; changed: boolean }>;
+    get: () => Promise<{
+      dir: string;
+      chosen: boolean;
+      packaged: boolean;
+      server?: string | null;
+      /** The pointer the folder itself carries, if any. A claim by whoever
+       *  wrote it — never acted on without a person saying so. */
+      config?: ProjectConfig | null;
+      isRepo?: boolean;
+    }>;
+    choose: () => Promise<{ dir: string; changed: boolean; config?: ProjectConfig | null; isRepo?: boolean }>;
+    pick?: () => Promise<{
+      dir: string | null;
+      cancelled: boolean;
+      config?: ProjectConfig | null;
+      isRepo?: boolean;
+    }>;
+    bind?: (opts: { dir: string; write?: boolean; workspace?: string }) => Promise<{
+      ok: boolean;
+      dir?: string;
+      wrote?: boolean;
+      error?: string;
+    }>;
   };
   agent?: {
     command?: (patch?: { command: string; args: string[] } | null) => Promise<{
@@ -98,6 +119,10 @@ type Bridge = {
 
 /** Owned by the machine, not the server: a teammate's message starting a shell
  *  on this laptop is remote code execution, so the laptop keeps its own veto. */
+/** What a project folder may say about itself: which workspace it belongs
+ *  to. Never a credential — see the writer in the main process. */
+export type ProjectConfig = { server: string; workspace?: string };
+
 export type AgentPolicy = {
   enabled: boolean;
   triggerFrom: "owner" | "anyone";

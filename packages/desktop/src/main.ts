@@ -71,6 +71,49 @@ function storeProject(dir: string | null, serverUrl?: string | null) {
   writeFileSync(projectFile(), JSON.stringify(key ? { byServer } : { dir }, null, 2));
 }
 
+/**
+ * The pointer a project directory may carry: which workspace this code
+ * belongs to.
+ *
+ * It is written to be committed. That is the whole value — a teammate clones
+ * the repository, opens the folder, and their agent reaches the same team's
+ * memory without anyone walking them through it. Which also means it is
+ * untrusted input: anyone can put a server in a repository, so this file is
+ * only ever a claim. It names a host; it never carries a credential, and
+ * finding one must never connect, switch workspace, or send a token
+ * anywhere. A person confirms, and the binding that results is stored here
+ * in userData like any other.
+ */
+const PROJECT_CONFIG = "bulletz.json";
+
+export type ProjectConfig = { server: string; workspace?: string };
+
+function readProjectConfig(dir: string): ProjectConfig | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, PROJECT_CONFIG), "utf8")) as ProjectConfig;
+    // http/https only. A file: or javascript: "server" is not a server, and
+    // the rest of the app would carry it a long way before noticing.
+    if (typeof raw?.server !== "string" || !/^https?:\/\//.test(raw.server)) return null;
+    return {
+      server: raw.server.replace(/\/+$/, ""),
+      ...(typeof raw.workspace === "string" ? { workspace: raw.workspace.slice(0, 120) } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeProjectConfig(dir: string, cfg: ProjectConfig) {
+  // Deliberately only these two keys. There is no shape of this file that
+  // should ever hold a token, so there is no code path here that could.
+  const body = { server: cfg.server.replace(/\/+$/, ""), ...(cfg.workspace ? { workspace: cfg.workspace } : {}) };
+  writeFileSync(join(dir, PROJECT_CONFIG), JSON.stringify(body, null, 2) + "\n");
+}
+
+/** Whether committing a pointer here would reach anyone. Offered by default
+ *  in a repository and not outside one, because that is where it pays off. */
+const looksLikeRepo = (dir: string) => existsSync(join(dir, ".git"));
+
 function projectRoot(): string {
   const chosen = storedProject();
   if (chosen) return chosen;
@@ -754,11 +797,73 @@ app.whenReady().then(() => {
 
   ipcMain.handle("app:version", () => APP_VERSION);
 
-  ipcMain.handle("project:get", () => ({
-    dir: projectRoot(),
-    chosen: storedProject() !== null,
-    packaged: app.isPackaged,
-  }));
+  ipcMain.handle("project:get", () => {
+    const dir = projectRoot();
+    return {
+      dir,
+      chosen: storedProject() !== null,
+      packaged: app.isPackaged,
+      server: storedServer(),
+      config: readProjectConfig(dir),
+      isRepo: looksLikeRepo(dir),
+    };
+  });
+
+  /**
+   * Open the picker and report what is there — without binding anything.
+   *
+   * Separate from the binding on purpose. A folder may already carry a
+   * pointer to a different workspace, and that has to be shown to a person
+   * before it is acted on in either direction. Choosing is a question; the
+   * answer is project:bind.
+   */
+  ipcMain.handle("project:pick", async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const opts = {
+      title: "Choose the folder this workspace's code lives in",
+      properties: ["openDirectory", "createDirectory"] as const,
+      defaultPath: projectRoot(),
+    };
+    const res = win
+      ? await dialog.showOpenDialog(win, { ...opts, properties: [...opts.properties] })
+      : await dialog.showOpenDialog({ properties: [...opts.properties] });
+    const dir = res.canceled ? null : (res.filePaths[0] ?? null);
+    if (!dir) return { dir: null, cancelled: true };
+    return { dir, cancelled: false, config: readProjectConfig(dir), isRepo: looksLikeRepo(dir) };
+  });
+
+  /**
+   * Bind a folder to the workspace this window is signed in to, and
+   * optionally leave the pointer behind for whoever clones it next.
+   */
+  ipcMain.handle(
+    "project:bind",
+    (_e, { dir, write, workspace }: { dir: string; write?: boolean; workspace?: string }) => {
+      if (typeof dir !== "string" || !dir || !existsSync(dir)) {
+        return { ok: false, error: "That folder does not exist." };
+      }
+      const before = envFingerprint();
+      storeProject(dir);
+      const server = storedServer();
+      let wrote = false;
+      if (write && server) {
+        try {
+          writeProjectConfig(dir, { server, ...(workspace ? { workspace } : {}) });
+          wrote = true;
+        } catch (e) {
+          // Worth reporting and not worth failing the binding over: the folder
+          // is bound either way, the file is a convenience for other people.
+          return { ok: true, dir, wrote: false, error: (e as Error).message };
+        }
+      }
+      // A running pty cannot be moved to a new cwd, so the panes need to hear
+      // that they are now in the wrong place.
+      if (envFingerprint() !== before) announceEnvChange();
+      return { ok: true, dir, wrote };
+    },
+  );
+
+  // Kept for the Settings panel, which asks and binds in one motion.
   ipcMain.handle("project:choose", async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     const res = win
@@ -769,10 +874,17 @@ app.whenReady().then(() => {
         })
       : await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
     if (res.canceled || !res.filePaths[0]) return { dir: projectRoot(), changed: false };
+    const before = envFingerprint();
     storeProject(res.filePaths[0]);
+    if (envFingerprint() !== before) announceEnvChange();
     // Existing shells keep their old cwd; a pty cannot be moved. New ones pick
     // the change up, and the UI says so.
-    return { dir: res.filePaths[0], changed: true };
+    return {
+      dir: res.filePaths[0],
+      changed: true,
+      config: readProjectConfig(res.filePaths[0]),
+      isRepo: looksLikeRepo(res.filePaths[0]),
+    };
   });
 
   /** Which agent the Agent pane runs, and what is available to choose. */

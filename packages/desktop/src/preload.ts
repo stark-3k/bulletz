@@ -51,9 +51,36 @@ contextBridge.exposeInMainWorld("bulletz", {
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   project: {
     get: () =>
-      ipcRenderer.invoke("project:get") as Promise<{ dir: string; chosen: boolean; packaged: boolean }>,
+      ipcRenderer.invoke("project:get") as Promise<{
+        dir: string;
+        chosen: boolean;
+        packaged: boolean;
+        server: string | null;
+        config: { server: string; workspace?: string } | null;
+        isRepo: boolean;
+      }>,
     choose: () =>
-      ipcRenderer.invoke("project:choose") as Promise<{ dir: string; changed: boolean }>,
+      ipcRenderer.invoke("project:choose") as Promise<{
+        dir: string;
+        changed: boolean;
+        config?: { server: string; workspace?: string } | null;
+        isRepo?: boolean;
+      }>,
+    /** Ask, without binding — the folder may already claim another workspace. */
+    pick: () =>
+      ipcRenderer.invoke("project:pick") as Promise<{
+        dir: string | null;
+        cancelled: boolean;
+        config?: { server: string; workspace?: string } | null;
+        isRepo?: boolean;
+      }>,
+    bind: (opts: { dir: string; write?: boolean; workspace?: string }) =>
+      ipcRenderer.invoke("project:bind", opts) as Promise<{
+        ok: boolean;
+        dir?: string;
+        wrote?: boolean;
+        error?: string;
+      }>,
   },
   agent: {
     command: (patch?: { command: string; args: string[] } | null) =>

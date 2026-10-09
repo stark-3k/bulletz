@@ -299,6 +299,29 @@ button { font: inherit; cursor: pointer; }
 /* -------------------------------- auth ------------------------------- */
 
 .auth { height: 100%; display: grid; place-items: center; }
+
+/* The folder question, asked once after signing in. Wider than the auth card
+   because it shows a path, and paths are long. */
+.setup { height: 100%; display: grid; place-items: center; padding: 24px; }
+.setup-card {
+  width: 540px; max-width: 100%; background: var(--bg-raised);
+  border: 1px solid var(--line); border-radius: 11px; padding: 24px;
+}
+.setup-title { font-size: 15px; margin: 0 0 6px; }
+.setup-sub { color: var(--fg-dim); font-size: 12px; margin: 0 0 18px; line-height: 1.6; }
+.setup-card .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.setup-card .server-inline { overflow-wrap: anywhere; }
+.setup-check {
+  display: flex; gap: 9px; align-items: flex-start; margin-top: 16px;
+  font-size: 12px; color: var(--fg-dim); line-height: 1.6; cursor: pointer;
+}
+.setup-check input { margin-top: 2px; flex: none; }
+.setup-warn {
+  margin-top: 16px; padding: 10px 12px; border-radius: 8px; font-size: 12px;
+  line-height: 1.6; color: var(--fg); background: rgba(224, 150, 62, .10);
+  border: 1px solid rgba(224, 150, 62, .35);
+}
+.setup-warn strong { display: block; margin-bottom: 3px; }
 .auth-card {
   width: 370px; background: var(--bg-raised); border: 1px solid var(--line);
   border-radius: 11px; padding: 24px;

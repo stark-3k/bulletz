@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
 import { ensureAgentCredential } from "./agentCredential.ts";
+import { ProjectSetup, hasSkippedProject } from "./ProjectSetup.tsx";
 import { Settings } from "./Settings.tsx";
 import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
 import { NotificationBell, type LocalNotification } from "./Notifications.tsx";
@@ -72,6 +73,8 @@ export function App() {
    *  session that is still perfectly valid, so cancelling must return to it. */
   const [addingWorkspace, setAddingWorkspace] = useState(() => isAddingWorkspace());
   const [me, setMe] = useState<{ id: string; handle: string; kind: string; role: string } | null>(null);
+  /** This workspace has no folder yet and nobody has waved the question away. */
+  const [needsProject, setNeedsProject] = useState(false);
   const [authErr, setAuthErr] = useState("");
   const [probe, setProbe] = useState(0);
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
@@ -136,6 +139,16 @@ export function App() {
         // And the agent in the dock gets an identity without anyone having to
         // find the onboarding step for it.
         void ensureAgentCredential(api);
+
+        // Ask where this workspace's code lives, once, now — while the person
+        // is still setting things up and knows the answer. Skippable; the
+        // terminal's own gate catches anyone who skips.
+        const b = bridge();
+        if (b?.project?.pick && b.project.bind) {
+          const info = await b.project.get();
+          if (!live) return;
+          if (!info.chosen && !hasSkippedProject(account.serverUrl)) setNeedsProject(true);
+        }
       } catch (e) {
         if (!live) return;
         setAuthErr((e as Error).message);
@@ -192,6 +205,16 @@ export function App() {
       />
     );
   }
+  if (needsProject) {
+    return (
+      <ProjectSetup
+        server={resolveServer()}
+        workspaceName={activeAccount()?.workspaceName ?? "this workspace"}
+        onDone={() => setNeedsProject(false)}
+      />
+    );
+  }
+
   /** Sign out of the workspace in view. Other workspaces stay signed in —
    *  leaving one team is not leaving all of them — and the most recent
    *  survivor becomes active. */
