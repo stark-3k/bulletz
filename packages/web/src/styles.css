@@ -300,6 +300,13 @@ button { font: inherit; cursor: pointer; }
 
 .auth { height: 100%; display: grid; place-items: center; }
 
+/* What a link says it is for, shown before anyone is asked for a password. */
+.invite-for {
+  margin: 0 0 14px; padding: 9px 11px; border-radius: 7px; font-size: 12px;
+  line-height: 1.6; color: var(--fg); background: var(--bg-sunken, rgba(255,255,255,.04));
+  border: 1px solid var(--line);
+}
+
 /* The folder question, asked once after signing in. Wider than the auth card
    because it shows a path, and paths are long. */
 .setup { height: 100%; display: grid; place-items: center; padding: 24px; }

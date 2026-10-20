@@ -104,6 +104,14 @@ export const auth = {
   accept: (body: { code: string; handle: string; password: string; display_name?: string; email?: string }) =>
     post("/auth/accept", body),
   reset: (code: string, password: string) => post("/auth/reset", { code, password }),
+  /** What an invite is for, without spending it. Null when it is invalid,
+   *  used or expired — which is the same answer, on purpose. */
+  peekInvite: async (code: string) => {
+    const res = await fetch(`${BASE}/v1/auth/invite/${encodeURIComponent(code)}`);
+    if (!res.ok) return null;
+    const d = (await res.json()) as { invite: { workspace: string; role: string; expires_at: string } };
+    return d.invite;
+  },
 };
 
 async function post(path: string, body: unknown): Promise<{ token: string; expires_at: string }> {
@@ -204,7 +212,7 @@ export class Api {
   members = () => this.call<{ members: Member[] }>("GET", "/members");
   invites = () => this.call<{ invites: Invite[] }>("GET", "/invites");
   createInvite = (role: string, note?: string) =>
-    this.call<{ id: string; code: string; role: string; expires_at: string }>("POST", "/invites", {
+    this.call<{ id: string; code: string; url?: string; role: string; expires_at: string }>("POST", "/invites", {
       role,
       ...(note ? { note } : {}),
     });

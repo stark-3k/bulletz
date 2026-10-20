@@ -3,11 +3,12 @@ import type { Decision, Event, Note, Task, Channel } from "@bulletz/shared";
 import { Api, auth, bootstrap, type Constraint, type Presence, type Project } from "./api.ts";
 import { ensureAgentCredential } from "./agentCredential.ts";
 import { ProjectSetup, hasSkippedProject } from "./ProjectSetup.tsx";
+import { parseInvite, inviteFromLocation, clearInviteFromLocation, holdInvite } from "./invites.ts";
 import { Settings } from "./Settings.tsx";
 import { Connect, ServerPicker, Unreachable } from "./ServerPicker.tsx";
 import { NotificationBell, type LocalNotification } from "./Notifications.tsx";
 import { checkForUpdate, dismissUpdate } from "./updates.ts";
-import { clearServer, resolveServer, serverSource } from "./server.ts";
+import { clearServer, resolveServer, serverSource, setServer } from "./server.ts";
 import {
   activeAccount,
   beginAddWorkspace,
@@ -337,7 +338,12 @@ function Auth({
   onSubmit: (t: string) => void;
   onCancel?: (() => void) | undefined;
 }) {
-  const [mode, setMode] = useState<"login" | "invite" | "token" | "reset">("login");
+  const [mode, setMode] = useState<"login" | "invite" | "token" | "reset">(() =>
+    inviteFromLocation() ? "invite" : "login",
+  );
+  /** What the link says it is for, so nobody is asked to choose a password
+   *  before being told whose workspace they are joining. */
+  const [invited, setInvited] = useState<{ workspace: string; role: string } | null>(null);
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -345,6 +351,43 @@ function Auth({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+
+  /**
+   * Take an invite however it arrives: a link, or a bare code.
+   *
+   * A link names its own server, and following one is a deliberate act of
+   * pointing this window somewhere — so it reloads rather than quietly
+   * swapping the API base under a half-filled form.
+   */
+  const takeInvite = useCallback((raw: string) => {
+    const parsed = parseInvite(raw);
+    if (!parsed) {
+      setCode(raw);
+      return;
+    }
+    setCode(parsed.code);
+    if (parsed.server && parsed.server !== resolveServer()) {
+      // Pointing the window at another server has to happen on a reload — the
+      // API base is read once at startup. The code travels in session storage
+      // rather than the URL because the packaged renderer runs from file://,
+      // where a path is the filesystem and not a route.
+      setServer(parsed.server);
+      holdInvite(parsed.code);
+      location.reload();
+      return;
+    }
+    void auth.peekInvite(parsed.code).then(setInvited);
+  }, []);
+
+  // Opened by following a link: read it, then take it out of the address bar
+  // so a reload does not re-open an invite that has since been spent.
+  useEffect(() => {
+    const fromLink = inviteFromLocation();
+    if (!fromLink) return;
+    setCode(fromLink);
+    clearInviteFromLocation();
+    void auth.peekInvite(fromLink).then(setInvited);
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -438,8 +481,29 @@ function Auth({
           <>
             {mode === "invite" && (
               <>
-                <label htmlFor="code">Invite code</label>
-                <input id="code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="blz_i_…" autoFocus />
+                {invited && (
+                  <p className="invite-for">
+                    You have been invited to <strong>{invited.workspace}</strong> as a{" "}
+                    {invited.role}. Pick a handle and a password to join.
+                  </p>
+                )}
+                <label htmlFor="code">Invite link or code</label>
+                <input
+                  id="code"
+                  value={code}
+                  onChange={(e) => takeInvite(e.target.value)}
+                  onPaste={(e) => {
+                    // Handled here as well as on change so a pasted link is
+                    // acted on whole, rather than once per intermediate value.
+                    const text = e.clipboardData.getData("text");
+                    if (/^https?:\/\//i.test(text.trim())) {
+                      e.preventDefault();
+                      takeInvite(text);
+                    }
+                  }}
+                  placeholder="https://…/invite/blz_i_…  or  blz_i_…"
+                  autoFocus
+                />
               </>
             )}
             <label htmlFor="handle">Handle</label>

@@ -14,6 +14,11 @@ export const env = {
    * means API only — which is how the desktop app alone uses it.
    */
   webRoot: process.env.WEB_ROOT ?? "",
+  /** The address people reach this server at, used to build invite links.
+   *  Optional: the request's own Host header is the right answer almost
+   *  always, and the only time it is not is a deployment that answers on a
+   *  name it is not addressed by. */
+  publicUrl: (process.env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
   /**
    * Browser origins allowed to call this API, comma separated.
    *

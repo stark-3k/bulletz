@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { probeServer, normaliseServer, resolveServer, setServer, savedServer, clearServer } from "./server.ts";
+import { holdInvite, parseInvite } from "./invites.ts";
 import { bridge } from "./Terminal.tsx";
 import logoUrl from "../public/logo.svg";
 
@@ -172,13 +173,22 @@ export function Connect({ onConnected }: { onConnected: () => void }) {
   const go = async () => {
     setBusy(true);
     setErr("");
-    const r = await probeServer(value);
+
+    // An invite link is a server address with the invitation attached, and
+    // this is the screen an invited person actually reaches first: they were
+    // sent one link, and being asked for a hostname they were never told is
+    // where that journey ends. Take the link here and carry the code through.
+    const invite = parseInvite(value);
+    const target = invite?.server ?? value;
+
+    const r = await probeServer(target);
     setBusy(false);
     if (!r.ok) {
       setErr(r.error);
       return;
     }
     setServer(r.url);
+    if (invite?.server) holdInvite(invite.code);
     await bridge()?.server?.set(r.url);
     onConnected();
   };
@@ -189,7 +199,7 @@ export function Connect({ onConnected }: { onConnected: () => void }) {
         <h1>
           <img className="logo-mark" src={logoUrl} alt="bulletz.ai" />
         </h1>
-        <p>Connect to your workspace.</p>
+        <p>Connect to your workspace, or paste the invite link you were sent.</p>
 
         <label htmlFor="connect-srv">Server address</label>
         <input
@@ -198,7 +208,7 @@ export function Connect({ onConnected }: { onConnected: () => void }) {
           autoFocus
           spellCheck={false}
           autoCapitalize="off"
-          placeholder="bulletz.your-team.com"
+          placeholder="bulletz.your-team.com — or paste an invite link"
           onChange={(e) => {
             setValue(e.target.value);
             setErr("");

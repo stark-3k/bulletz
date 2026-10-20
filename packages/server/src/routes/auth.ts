@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { maybeOne, one, q } from "../db.js";
 import { requireActor } from "../authHook.js";
+import { env } from "../env.js";
 import {
   can,
   createSession,
@@ -15,6 +16,35 @@ import {
 
 const INVITE_HOURS = 72;
 const RESET_HOURS = 2;
+
+/**
+ * Where this server is reachable, for a link someone will paste elsewhere.
+ *
+ * A bare code makes the person inviting do the rest of the work: they have
+ * to send the code AND tell you which server to put it into, and a code with
+ * no server attached is useless on its own. A link carries both.
+ *
+ * PUBLIC_URL wins when set; otherwise the request's own Host is what the
+ * sender just reached this server at, which is the best available guess at
+ * what will work for the recipient. X-Forwarded-Proto matters because the
+ * app sits behind a TLS terminator and sees plain http on the inside.
+ */
+function publicOrigin(req: { headers: Record<string, unknown>; protocol?: string }): string {
+  if (env.publicUrl) return env.publicUrl;
+  const header = (k: string) => {
+    const v = req.headers[k];
+    return typeof v === "string" ? v.split(",")[0]!.trim() : "";
+  };
+  const host = header("x-forwarded-host") || header("host");
+  if (!host) return "";
+  const proto = header("x-forwarded-proto") || req.protocol || "https";
+  return `${proto}://${host}`;
+}
+
+/** The link form of an invite code. Empty when the host is unknowable, in
+ *  which case the code alone is still returned and still works. */
+const inviteUrl = (origin: string, code: string) =>
+  origin ? `${origin}/invite/${encodeURIComponent(code)}` : "";
 
 export async function authRoutes(app: FastifyInstance) {
   /* ---------------------------- unauthenticated --------------------------- */
@@ -39,6 +69,29 @@ export async function authRoutes(app: FastifyInstance) {
       ip: req.ip,
     });
     return { token: session.token, expires_at: session.expires_at };
+  });
+
+  /**
+   * What an invite is for, without using it up.
+   *
+   * Someone opening a link should be told whose workspace it is and what
+   * they are being offered before they are asked to choose a password. It
+   * reveals nothing the code does not already grant — holding the code is
+   * the credential — and an invalid, used, expired or revoked one is a flat
+   * 404 so this cannot be used to sort real codes from invented ones by the
+   * shape of the answer.
+   */
+  app.get("/auth/invite/:code", async (req, reply) => {
+    const { code } = z.object({ code: z.string().min(8).max(200) }).parse(req.params);
+    const invite = await maybeOne<{ role: string; expires_at: string; workspace: string }>(
+      `select i.role, i.expires_at, w.name as workspace
+         from invites i join workspaces w on w.id = i.workspace_id
+        where i.code_hash = $1 and i.accepted_at is null
+          and i.revoked_at is null and i.expires_at > now()`,
+      [sha256(code)],
+    );
+    if (!invite) return reply.code(404).send({ error: "invite is invalid, used, or expired" });
+    return { invite };
   });
 
   /** Accept an invite: this is how a person gets an account at all. */
@@ -229,7 +282,13 @@ export async function authRoutes(app: FastifyInstance) {
         [req.actor.workspace_id, sha256(code), body.role, body.note ?? null, req.actor.id, String(INVITE_HOURS)],
       );
       // The only time the code is ever visible. It is stored hashed.
-      return reply.code(201).send({ id: invite.id, code, role: body.role, expires_at: invite.expires_at });
+      return reply.code(201).send({
+        id: invite.id,
+        code,
+        url: inviteUrl(publicOrigin(req), code),
+        role: body.role,
+        expires_at: invite.expires_at,
+      });
     });
 
     secured.get("/invites", async (req, reply) => {

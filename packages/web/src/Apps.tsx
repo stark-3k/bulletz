@@ -148,7 +148,7 @@ export function Apps({
 function Members({ api, me }: { api: Api; me: { id: string; handle: string; role: string } }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
-  const [fresh, setFresh] = useState<{ code: string; role: string } | null>(null);
+  const [fresh, setFresh] = useState<{ code: string; url?: string; role: string } | null>(null);
   const [reset, setReset] = useState<{ handle: string; code: string } | null>(null);
   const [role, setRole] = useState("member");
   const [err, setErr] = useState("");
@@ -217,7 +217,7 @@ function Members({ api, me }: { api: Api; me: { id: string; handle: string; role
             onClick={() =>
               void act(async () => {
                 const inv = await api.createInvite(role);
-                setFresh({ code: inv.code, role: inv.role });
+                setFresh({ code: inv.code, url: inv.url, role: inv.role });
               })
             }
           >
@@ -225,14 +225,25 @@ function Members({ api, me }: { api: Api; me: { id: string; handle: string; role
           </button>
           {fresh && (
             <span className="invite-code">
-              {/* Shown once: the server stores only a hash. */}
-              <code>{fresh.code}</code>
+              {/* Shown once: the server stores only a hash. The link is the
+                  thing to send — it carries the server address too, which a
+                  bare code does not, and a code without one cannot be used. */}
+              <code>{fresh.url || fresh.code}</code>
               <button
                 className="voice-ctl"
-                onClick={() => void navigator.clipboard?.writeText(fresh.code)}
+                onClick={() => void navigator.clipboard?.writeText(fresh.url || fresh.code)}
               >
-                Copy
+                {fresh.url ? "Copy link" : "Copy"}
               </button>
+              {fresh.url && (
+                <button
+                  className="voice-ctl"
+                  title="Just the code, for someone who already has this server set up"
+                  onClick={() => void navigator.clipboard?.writeText(fresh.code)}
+                >
+                  Copy code
+                </button>
+              )}
             </span>
           )}
         </div>
