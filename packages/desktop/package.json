@@ -29,10 +29,10 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.7.1",
+    "@electron/rebuild": "^4.2.1",
     "@types/node": "^22.10.2",
     "electron": "33.4.11",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.7.2"
   },

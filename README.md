@@ -65,7 +65,7 @@ The full design rationale — every rule and the reasoning behind it — is in
 
 ## Quick start
 
-Requires Node 22+ and Docker.
+Requires Node 22.12 or later and Docker.
 
 ```bash
 git clone git@github.com:stark-3k/bulletz.git
